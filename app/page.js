@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 
-// ---- DATA ----
+// ---- STATIC PLAN DATA ----
 const MARATHON = new Date("2026-11-29");
 const IRONMAN = new Date("2027-09-19");
 
@@ -84,10 +84,9 @@ const COACH_QS = [
   ["Sub-10","How does my training change for a sub-10 goal vs just finishing?"],
 ];
 
-const ICONMAP = { swim:"🏊", bike:"🚴", run:"🏃", push:"🏋️", pull:"🏋️", legs:"🏋️", brick:"⚡", rest:"🛌" };
-const NAMEMAP = { swim:"Swim", bike:"Bike", run:"Run", push:"Push", pull:"Pull", legs:"Legs", brick:"Brick", rest:"Rest" };
+const ICONMAP = { swim:"🏊", bike:"🚴", run:"🏃", strength:"🏋️", push:"🏋️", pull:"🏋️", legs:"🏋️", brick:"⚡", rest:"🛌", other:"🚶" };
+const NAMEMAP = { swim:"Swim", bike:"Bike", run:"Run", strength:"Strength", push:"Push", pull:"Pull", legs:"Legs", brick:"Brick", rest:"Rest", other:"Activity" };
 
-// ---- COMPONENT ----
 export default function Dashboard() {
   const [tab, setTab] = useState("today");
   const [dt, setDt] = useState("lift");
@@ -97,10 +96,30 @@ export default function Dashboard() {
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(null);
 
+  // Strava state
+  const [acts, setActs] = useState(null);
+  const [stravaErr, setStravaErr] = useState(null);
+  const [loadingStrava, setLoadingStrava] = useState(false);
+
   useEffect(() => {
     setNow(new Date());
     try { setLogs(JSON.parse(localStorage.getItem("maroun_logs") || "[]")); } catch {}
   }, []);
+
+  // Fetch Strava when the Load tab is first opened
+  useEffect(() => {
+    if (tab === "load" && acts === null && !loadingStrava && !stravaErr) {
+      setLoadingStrava(true);
+      fetch("/api/strava")
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok) setActs(d.activities);
+          else setStravaErr(d.error || "Could not load Strava");
+        })
+        .catch(e => setStravaErr(e.message))
+        .finally(() => setLoadingStrava(false));
+    }
+  }, [tab, acts, loadingStrava, stravaErr]);
 
   const dayIdx = now ? now.getDay() : 1;
   const s = SESSIONS[dayIdx];
@@ -116,18 +135,17 @@ export default function Dashboard() {
     setForm({ sport:"run", dist:"", dur:"", hr:"", pace:"", sleep:"", rhr:"", notes:"" });
     setRpe(null);
   }
-
   function copyQ(q) {
     try { navigator.clipboard.writeText(q); } catch {}
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    setCopied(true); setTimeout(() => setCopied(false), 2500);
   }
 
+  // ---- Derive stats from real Strava data ----
+  const stats = deriveStats(acts);
   const meal = MEALS[dt];
 
   return (
     <div>
-      {/* HEADER */}
       <div style={{ padding: "calc(env(safe-area-inset-top) + 18px) 18px 14px" }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
           <div>
@@ -138,13 +156,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* COUNTDOWN */}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, padding:"6px 18px 0" }}>
         <Cd num={dM} label="days to marathon" loc="Beirut · Nov 29, 2026" accent="var(--run)" />
         <Cd num={dI} label="days to Ironman" loc="Italy · Sep 19, 2027" accent="var(--swim)" />
       </div>
 
-      {/* SCREENS */}
       <div style={{ padding: 18 }}>
         {tab === "today" && (
           <>
@@ -157,21 +173,16 @@ export default function Dashboard() {
                   <div style={{ fontSize:12, color:"var(--txt2)", marginTop:2 }}>{s.meta}</div>
                 </div>
               </div>
-              {s.gym && (
-                <>
-                  <div style={miniLbl}>{s.gymLbl}</div>
-                  {s.gym.map((e,i) => (
-                    <div key={i} style={exRow}>
-                      <div>
-                        <div style={{ fontSize:13, fontWeight:500 }}>{e[0]}</div>
-                        <div style={{ fontSize:11, color:"var(--txt2)", marginTop:1 }}>{e[1]}</div>
-                      </div>
-                      <span style={{ ...exW, background: iconBg(s.cls), color: chipTxt(s.cls) }}>{e[2]}</span>
-                    </div>
-                  ))}
-                  <div style={divider} />
-                </>
-              )}
+              {s.gym && (<>
+                <div style={miniLbl}>{s.gymLbl}</div>
+                {s.gym.map((e,i) => (
+                  <div key={i} style={exRow}>
+                    <div><div style={{ fontSize:13, fontWeight:500 }}>{e[0]}</div><div style={{ fontSize:11, color:"var(--txt2)", marginTop:1 }}>{e[1]}</div></div>
+                    <span style={{ ...exW, background: iconBg(s.cls), color: chipTxt(s.cls) }}>{e[2]}</span>
+                  </div>
+                ))}
+                <div style={divider} />
+              </>)}
               <div style={miniLbl}>{s.cardioLbl}</div>
               <div style={{ ...focus, whiteSpace:"pre-line" }}>{s.cardio}</div>
             </div>
@@ -192,10 +203,7 @@ export default function Dashboard() {
               ))}
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:8, marginBottom:16 }}>
-              <Mt v={meal.k} l="kcal" />
-              <Mt v={meal.p+"g"} l="protein" c="#8FC4F2" />
-              <Mt v={meal.c+"g"} l="carbs" c="#B3E07F" />
-              <Mt v={meal.f+"g"} l="fat" c="#F2C48F" />
+              <Mt v={meal.k} l="kcal" /><Mt v={meal.p+"g"} l="protein" c="#8FC4F2" /><Mt v={meal.c+"g"} l="carbs" c="#B3E07F" /><Mt v={meal.f+"g"} l="fat" c="#F2C48F" />
             </div>
             <Lbl>{meal.lbl} meals</Lbl>
             {meal.m.map((m,i) => (
@@ -228,11 +236,43 @@ export default function Dashboard() {
               <MCard label="Recovery" val="100%" sub="Full recovery" sc="var(--green)" />
               <MCard label="Status" val="Optimized" sub="EvoLab" sc="var(--green)" small />
             </div>
-            <Lbl>Ironman readiness</Lbl>
-            <Pbar label="Swim · 1.76 / 3.8 km" pct={46} color="var(--swim)" />
-            <Pbar label="Bike · 68.9 / 180 km" pct={38} color="var(--bike)" />
-            <Pbar label="Run · 10.1 / 42.2 km" pct={24} color="var(--run)" />
-            <Pbar label="Overall readiness" pct={35} color="var(--push)" />
+
+            {/* REAL STRAVA DATA */}
+            <Lbl>This week — from Strava</Lbl>
+            {loadingStrava && <div style={{ ...tip }}>Loading your Strava activities…</div>}
+            {stravaErr && <Alert c="w">⚠️ Couldn't load Strava: {stravaErr}</Alert>}
+            {acts && (
+              <>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:14 }}>
+                  <Mt v={stats.week.swim.toFixed(1)} l="swim km" c="#8FC4F2" />
+                  <Mt v={stats.week.bike.toFixed(0)} l="bike km" c="#B3E07F" />
+                  <Mt v={stats.week.run.toFixed(1)} l="run km" c="#F2C48F" />
+                </div>
+                <Lbl>Ironman readiness — your longest single sessions</Lbl>
+                <Pbar label={`Swim · ${stats.longest.swim.toFixed(2)} / 3.8 km`} pct={Math.min(100, Math.round(stats.longest.swim/3.8*100))} color="var(--swim)" />
+                <Pbar label={`Bike · ${stats.longest.bike.toFixed(1)} / 180 km`} pct={Math.min(100, Math.round(stats.longest.bike/180*100))} color="var(--bike)" />
+                <Pbar label={`Run · ${stats.longest.run.toFixed(1)} / 42.2 km`} pct={Math.min(100, Math.round(stats.longest.run/42.2*100))} color="var(--run)" />
+                <Lbl>Recent activities</Lbl>
+                {acts.slice(0,10).map((a,i) => (
+                  <div key={a.id || i} style={logItem}>
+                    <div style={{ display:"flex", alignItems:"center", gap:11 }}>
+                      <div style={{ ...logBadge, background: iconBg(a.sport) }}>{ICONMAP[a.sport] || "🏃"}</div>
+                      <div>
+                        <div style={{ fontSize:13, fontWeight:600 }}>{a.name || NAMEMAP[a.sport]}</div>
+                        <div style={{ fontSize:11, color:"var(--txt2)", marginTop:1 }}>
+                          {new Date(a.date).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}{a.movingTimeMin?` · ${a.movingTimeMin} min`:""}{a.avgHr?` · ${Math.round(a.avgHr)} bpm`:""}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontSize:13, fontWeight:600 }}>{a.distanceKm>0?`${a.distanceKm}km`:""}</div>
+                      <div style={{ fontSize:11, color:"var(--txt2)" }}>{a.elevationM>0?`${a.elevationM}m`:""}</div>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+
             <Lbl>Key metrics</Lbl>
             <div style={{ ...card, padding:"6px 16px" }}>
               <MetricRow n="Threshold pace" d="COROS test" v="5:10/km" cls="run" />
@@ -269,9 +309,7 @@ export default function Dashboard() {
               </div>
               <Field label="Effort (RPE)">
                 <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-                  {[1,2,3,4,5,6,7,8,9,10].map(n => (
-                    <button key={n} onClick={()=>setRpe(n)} style={rpeBtn(rpe===n)}>{n}</button>
-                  ))}
+                  {[1,2,3,4,5,6,7,8,9,10].map(n => (<button key={n} onClick={()=>setRpe(n)} style={rpeBtn(rpe===n)}>{n}</button>))}
                 </div>
               </Field>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
@@ -281,9 +319,9 @@ export default function Dashboard() {
               <Field label="Notes"><textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="How did it feel?" style={{...input, minHeight:64, resize:"vertical"}} /></Field>
               <button onClick={saveLog} style={btn}>Save session</button>
             </div>
-            <Lbl>Recent sessions</Lbl>
+            <Lbl>Manually logged sessions</Lbl>
             {logs.length === 0 ? (
-              <div style={{ textAlign:"center", padding:"30px 16px", color:"var(--txt3)", fontSize:13 }}>No sessions logged yet. Add your first above.</div>
+              <div style={{ textAlign:"center", padding:"30px 16px", color:"var(--txt3)", fontSize:13 }}>No manual sessions yet. Your Strava activities show on the Load tab. Use this for gym sessions Strava doesn't capture in detail.</div>
             ) : logs.slice(0,12).map((w,i) => (
               <div key={i} style={logItem}>
                 <div style={{ display:"flex", alignItems:"center", gap:11 }}>
@@ -318,12 +356,10 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* NAV */}
       <div style={nav}>
         {[["today","🏠","Today"],["nutrition","🥗","Nutrition"],["load","📊","Load"],["log","➕","Log"],["coach","💬","Coach"]].map(([id,ic,lbl]) => (
           <button key={id} onClick={()=>{ setTab(id); window.scrollTo(0,0); }} style={navI(tab===id)}>
-            <span style={{ fontSize:20 }}>{ic}</span>
-            <span>{lbl}</span>
+            <span style={{ fontSize:20 }}>{ic}</span><span>{lbl}</span>
           </button>
         ))}
       </div>
@@ -331,16 +367,30 @@ export default function Dashboard() {
   );
 }
 
-// ---- SUB-COMPONENTS ----
+// ---- derive weekly + longest stats from Strava activities ----
+function deriveStats(acts) {
+  const base = { week: { swim:0, bike:0, run:0 }, longest: { swim:0, bike:0, run:0 } };
+  if (!acts) return base;
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7*864e5);
+  for (const a of acts) {
+    const d = new Date(a.date);
+    if (["swim","bike","run"].includes(a.sport)) {
+      if (a.distanceKm > base.longest[a.sport]) base.longest[a.sport] = a.distanceKm;
+      if (d >= weekAgo) base.week[a.sport] += a.distanceKm;
+    }
+  }
+  return base;
+}
+
+// ---- sub-components ----
 function Cd({ num, label, loc, accent }) {
-  return (
-    <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:14, position:"relative", overflow:"hidden" }}>
-      <div style={{ position:"absolute", top:0, right:0, width:60, height:60, borderRadius:"50%", background:accent, opacity:0.12 }} />
-      <div className="archivo" style={{ fontSize:32, fontWeight:800, lineHeight:1, letterSpacing:"-0.03em" }}>{num}</div>
-      <div style={{ fontSize:11, color:"var(--txt2)", marginTop:5, fontWeight:500 }}>{label}</div>
-      <div style={{ fontSize:10, color:"var(--txt3)", marginTop:1 }}>{loc}</div>
-    </div>
-  );
+  return (<div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:14, position:"relative", overflow:"hidden" }}>
+    <div style={{ position:"absolute", top:0, right:0, width:60, height:60, borderRadius:"50%", background:accent, opacity:0.12 }} />
+    <div className="archivo" style={{ fontSize:32, fontWeight:800, lineHeight:1, letterSpacing:"-0.03em" }}>{num}</div>
+    <div style={{ fontSize:11, color:"var(--txt2)", marginTop:5, fontWeight:500 }}>{label}</div>
+    <div style={{ fontSize:10, color:"var(--txt3)", marginTop:1 }}>{loc}</div>
+  </div>);
 }
 function Lbl({ children }) { return <div style={{ fontSize:11, fontWeight:600, color:"var(--txt3)", textTransform:"uppercase", letterSpacing:"0.08em", margin:"18px 0 10px" }}>{children}</div>; }
 function Mt({ v, l, c }) { return <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:10, padding:"12px 6px", textAlign:"center" }}><div className="archivo" style={{ fontSize:18, fontWeight:700, color:c||"var(--txt)" }}>{v}</div><div style={{ fontSize:10, color:"var(--txt2)", marginTop:3 }}>{l}</div></div>; }
@@ -350,7 +400,6 @@ function MetricRow({ n, d, v, cls, last }) { return <div style={{ display:"flex"
 function Field({ label, children }) { return <div style={{ marginBottom:13 }}><label style={{ fontSize:12, color:"var(--txt2)", marginBottom:6, display:"block", fontWeight:500 }}>{label}</label>{children}</div>; }
 function Alert({ c, children }) { const bg = c==="w"?"rgba(242,160,61,0.12)":c==="g"?"rgba(93,203,142,0.12)":"rgba(61,155,233,0.12)"; const col = c==="w"?"#F2C48F":c==="g"?"#9CE0B8":"#9FCEF2"; return <div style={{ borderRadius:10, padding:"11px 13px", fontSize:13, lineHeight:1.5, marginBottom:8, background:bg, color:col }}>{children}</div>; }
 
-// ---- STYLES ----
 const card = { background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:16, marginBottom:12 };
 const sIcon = { width:42, height:42, borderRadius:12, display:"flex", alignItems:"center", justifyContent:"center", fontSize:20, flexShrink:0 };
 const miniLbl = { fontSize:11, fontWeight:600, color:"var(--txt3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 };
@@ -372,5 +421,5 @@ function chip(on) { return { padding:"8px 14px", border:`1px solid ${on?"var(--g
 function rpeBtn(on) { return { flex:1, minWidth:30, height:38, border:`1px solid ${on?"var(--gold)":"var(--line2)"}`, borderRadius:10, fontSize:13, fontWeight:600, background:on?"var(--gold)":"var(--bg2)", color:on?"#1a1206":"var(--txt2)", cursor:"pointer", fontFamily:"inherit" }; }
 function navI(on) { return { flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3, padding:"6px 0", background:"none", border:"none", color:on?"var(--gold)":"var(--txt3)", cursor:"pointer", fontFamily:"inherit", fontSize:10, fontWeight:600 }; }
 function mm(color, bg) { return { fontSize:10, fontWeight:600, padding:"3px 8px", borderRadius:99, color, background:bg }; }
-function iconBg(cls) { return { push:"rgba(156,127,232,0.18)", pull:"rgba(156,127,232,0.18)", swim:"rgba(61,155,233,0.18)", bike:"rgba(127,194,65,0.18)", run:"rgba(242,160,61,0.18)", legs:"rgba(79,176,232,0.18)", rest:"var(--card2)", brick:"rgba(242,160,61,0.18)" }[cls] || "var(--card2)"; }
-function chipTxt(cls) { return { push:"#C4B0F2", pull:"#C4B0F2", swim:"#8FC4F2", bike:"#B3E07F", run:"#F2C48F", legs:"#8FC4F2", rest:"var(--txt2)", brick:"#F2C48F" }[cls] || "var(--txt2)"; }
+function iconBg(cls) { return { push:"rgba(156,127,232,0.18)", pull:"rgba(156,127,232,0.18)", swim:"rgba(61,155,233,0.18)", bike:"rgba(127,194,65,0.18)", run:"rgba(242,160,61,0.18)", legs:"rgba(79,176,232,0.18)", strength:"rgba(156,127,232,0.18)", rest:"var(--card2)", brick:"rgba(242,160,61,0.18)", other:"var(--card2)" }[cls] || "var(--card2)"; }
+function chipTxt(cls) { return { push:"#C4B0F2", pull:"#C4B0F2", swim:"#8FC4F2", bike:"#B3E07F", run:"#F2C48F", legs:"#8FC4F2", strength:"#C4B0F2", rest:"var(--txt2)", brick:"#F2C48F", other:"var(--txt2)" }[cls] || "var(--txt2)"; }

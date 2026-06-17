@@ -19,7 +19,9 @@ export const viewport = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} ${archivo.variable}`}>{children}</body>
+      <body className={`${inter.variable} ${archivo.variable}`} suppressHydrationWarning>
+        {children}
+      </body>
     </html>
   );
 }
