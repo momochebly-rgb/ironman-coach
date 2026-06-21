@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 // ---- STATIC PLAN DATA ----
 const MARATHON = new Date("2026-11-29");
@@ -34,11 +34,11 @@ const SESSIONS = {
     cardioLbl: "Focus",
     cardio: "Bilateral breathing every 3 strokes. Time each 100m. High elbow catch. If your stroke breaks down, slow down and fix it.",
     note: "Friday technique swim. No ego in the water — quality over speed. This is your weakest discipline, so it matters most." },
-  6: { t: "Long Run", ic: "🏃", cls: "run", meta: "6:00 AM · 12km", gymLbl: "Run",
-    gym: [["Long run","12km","HR<168"],["Pace","none","time on feet"],["Fuel","500ml water","none <90min"]],
+  6: { t: "Long Run", ic: "🏃", cls: "run", meta: "6:00 AM · build by feel", gymLbl: "Run",
+    gym: [["Long run","12–13km","HR<168"],["Pace","none","time on feet"],["Fuel","500ml water","none <90min"]],
     cardioLbl: "Note",
-    cardio: "HR below 168 the entire run. If you hit a hill and HR climbs, walk the hill. This is base building, not racing.",
-    note: "Saturday long run — your most important aerobic session. Builds the engine everything else runs on. Stay easy." },
+    cardio: "HR below 168 the entire run. Build long runs ~10% at a time — don't jump distance. This is base building, not racing.",
+    note: "Saturday/Sunday long run — your most important aerobic session. Builds the engine everything else runs on. Stay easy." },
 };
 
 const MEALS = {
@@ -75,13 +75,11 @@ const MEALS = {
     ["9:30 PM","Before bed","Casein or cottage cheese",28,8,4,180]] },
 };
 
-const COACH_QS = [
-  ["This week","What should I focus on most urgently to stay on track for sub-10?"],
-  ["Bike","What road/tri bike should I buy in Lebanon under $2000? Specific models."],
-  ["Swim","4-week program to get my pace from 2:05 to 1:50/100m."],
-  ["Lifting","My bench 1RM is 60kg, squat 70kg. What weights this week?"],
-  ["Nutrition","Exact meal plan for today's lifting day."],
-  ["Sub-10","How does my training change for a sub-10 goal vs just finishing?"],
+const QUICK_QS = [
+  "What should I focus on most this week for sub-10?",
+  "Analyse my last week of training from Strava.",
+  "What's my longest run, ride and swim recently?",
+  "Should I run long today based on my recent load?",
 ];
 
 const ICONMAP = { swim:"🏊", bike:"🚴", run:"🏃", strength:"🏋️", push:"🏋️", pull:"🏋️", legs:"🏋️", brick:"⚡", rest:"🛌", other:"🚶" };
@@ -93,33 +91,37 @@ export default function Dashboard() {
   const [rpe, setRpe] = useState(null);
   const [logs, setLogs] = useState([]);
   const [form, setForm] = useState({ sport:"run", dist:"", dur:"", hr:"", pace:"", sleep:"", rhr:"", notes:"" });
-  const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(null);
 
-  // Strava state
+  // Strava
   const [acts, setActs] = useState(null);
   const [stravaErr, setStravaErr] = useState(null);
   const [loadingStrava, setLoadingStrava] = useState(false);
+
+  // Coach chat
+  const [coachMode, setCoachMode] = useState("head"); // "head" | "team"
+  const [chat, setChat] = useState([]); // {role:'user'|'assistant', content}
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const chatEndRef = useRef(null);
 
   useEffect(() => {
     setNow(new Date());
     try { setLogs(JSON.parse(localStorage.getItem("maroun_logs") || "[]")); } catch {}
   }, []);
 
-  // Fetch Strava when the Load tab is first opened
   useEffect(() => {
     if (tab === "load" && acts === null && !loadingStrava && !stravaErr) {
       setLoadingStrava(true);
-      fetch("/api/strava")
-        .then(r => r.json())
-        .then(d => {
-          if (d.ok) setActs(d.activities);
-          else setStravaErr(d.error || "Could not load Strava");
-        })
-        .catch(e => setStravaErr(e.message))
-        .finally(() => setLoadingStrava(false));
+      fetch("/api/strava").then(r => r.json()).then(d => {
+        if (d.ok) setActs(d.activities); else setStravaErr(d.error || "Could not load Strava");
+      }).catch(e => setStravaErr(e.message)).finally(() => setLoadingStrava(false));
     }
   }, [tab, acts, loadingStrava, stravaErr]);
+
+  useEffect(() => {
+    if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+  }, [chat, sending]);
 
   const dayIdx = now ? now.getDay() : 1;
   const s = SESSIONS[dayIdx];
@@ -135,13 +137,33 @@ export default function Dashboard() {
     setForm({ sport:"run", dist:"", dur:"", hr:"", pace:"", sleep:"", rhr:"", notes:"" });
     setRpe(null);
   }
-  function copyQ(q) {
-    try { navigator.clipboard.writeText(q); } catch {}
-    setCopied(true); setTimeout(() => setCopied(false), 2500);
+
+  async function sendToCoach(text) {
+    const msg = (text || input).trim();
+    if (!msg || sending) return;
+    setInput("");
+    const newChat = [...chat, { role: "user", content: msg }];
+    setChat(newChat);
+    setSending(true);
+    try {
+      const res = await fetch("/api/coach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg, mode: coachMode, history: chat }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setChat([...newChat, { role: "assistant", content: data.reply }]);
+      } else {
+        setChat([...newChat, { role: "assistant", content: "⚠️ " + (data.error || "Something went wrong.") }]);
+      }
+    } catch (e) {
+      setChat([...newChat, { role: "assistant", content: "⚠️ Couldn't reach the coach. Check your connection." }]);
+    } finally {
+      setSending(false);
+    }
   }
 
-  // ---- Derive stats from real Strava data ----
-  const stats = deriveStats(acts);
   const meal = MEALS[dt];
 
   return (
@@ -152,13 +174,13 @@ export default function Dashboard() {
             <div style={{ fontSize:13, color:"var(--txt2)" }}>{greet}</div>
             <div className="archivo" style={{ fontSize:24, fontWeight:800, letterSpacing:"-0.02em", marginTop:2 }}>Maroun</div>
           </div>
-          <div style={{ display:"flex", alignItems:"center", gap:5, background:"rgba(93,203,142,0.15)", color:"var(--green)", fontSize:12, fontWeight:600, padding:"6px 11px", borderRadius:99 }}>❤️ HRV 48 · Normal</div>
+          <div style={{ display:"flex", alignItems:"center", gap:5, background:"rgba(93,203,142,0.15)", color:"var(--green)", fontSize:12, fontWeight:600, padding:"6px 11px", borderRadius:99 }}>❤️ HRV 54 · Normal</div>
         </div>
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, padding:"6px 18px 0" }}>
         <Cd num={dM} label="days to marathon" loc="Beirut · Nov 29, 2026" accent="var(--run)" />
-        <Cd num={dI} label="days to Ironman" loc="Italy · Sep 19, 2027" accent="var(--swim)" />
+        <Cd num={dI} label="days to Ironman" loc="Italy · Sep 2027" accent="var(--swim)" />
       </div>
 
       <div style={{ padding: 18 }}>
@@ -188,7 +210,7 @@ export default function Dashboard() {
             </div>
             <Lbl>Coach's note</Lbl>
             <div style={note}>{s.note}</div>
-            <div style={{ ...tip, marginTop:14 }}>💬 For live coaching, message your coach in the Claude chat. This app works offline and saves your logs on this phone.</div>
+            <button style={{ ...primaryBtn, marginTop:14 }} onClick={() => { setTab("coach"); window.scrollTo(0,0); }}>💬 Ask your coach about today</button>
           </>
         )}
 
@@ -231,24 +253,23 @@ export default function Dashboard() {
           <>
             <Lbl>Recovery status</Lbl>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:4 }}>
-              <MCard label="Overnight HRV" val="48 ms" sub="Normal (44–56)" sc="var(--green)" />
+              <MCard label="Overnight HRV" val="54 ms" sub="Normal (46–56)" sc="var(--green)" />
               <MCard label="Resting HR" val="57 bpm" sub="Excellent base" sc="var(--green)" />
               <MCard label="Recovery" val="100%" sub="Full recovery" sc="var(--green)" />
               <MCard label="Status" val="Optimized" sub="EvoLab" sc="var(--green)" small />
             </div>
-
-            {/* REAL STRAVA DATA */}
             <Lbl>This week — from Strava</Lbl>
             {loadingStrava && <div style={{ ...tip }}>Loading your Strava activities…</div>}
             {stravaErr && <Alert c="w">⚠️ Couldn't load Strava: {stravaErr}</Alert>}
-            {acts && (
-              <>
+            {acts && (() => {
+              const stats = deriveStats(acts);
+              return (<>
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:14 }}>
                   <Mt v={stats.week.swim.toFixed(1)} l="swim km" c="#8FC4F2" />
                   <Mt v={stats.week.bike.toFixed(0)} l="bike km" c="#B3E07F" />
                   <Mt v={stats.week.run.toFixed(1)} l="run km" c="#F2C48F" />
                 </div>
-                <Lbl>Ironman readiness — your longest single sessions</Lbl>
+                <Lbl>Ironman readiness — longest single sessions</Lbl>
                 <Pbar label={`Swim · ${stats.longest.swim.toFixed(2)} / 3.8 km`} pct={Math.min(100, Math.round(stats.longest.swim/3.8*100))} color="var(--swim)" />
                 <Pbar label={`Bike · ${stats.longest.bike.toFixed(1)} / 180 km`} pct={Math.min(100, Math.round(stats.longest.bike/180*100))} color="var(--bike)" />
                 <Pbar label={`Run · ${stats.longest.run.toFixed(1)} / 42.2 km`} pct={Math.min(100, Math.round(stats.longest.run/42.2*100))} color="var(--run)" />
@@ -270,9 +291,8 @@ export default function Dashboard() {
                     </div>
                   </div>
                 ))}
-              </>
-            )}
-
+              </>);
+            })()}
             <Lbl>Key metrics</Lbl>
             <div style={{ ...card, padding:"6px 16px" }}>
               <MetricRow n="Threshold pace" d="COROS test" v="5:10/km" cls="run" />
@@ -282,8 +302,8 @@ export default function Dashboard() {
               <MetricRow n="Bike FTP" d="target 250W+" v="Pending" cls="bike" />
               <MetricRow n="Body fat" d="target 12%" v="20.3%" cls="run" last />
             </div>
-            <Alert c="w">⚠️ Bike volume critically low — get your bike within 3 weeks. Sub-10 lives on cycling.</Alert>
-            <Alert c="g">✅ HRV stable, recovery 100% — green light to train hard this week.</Alert>
+            <Alert c="w">⚠️ Buy your bike — renting past ~3 months costs more than buying. Sub-10 lives on cycling.</Alert>
+            <Alert c="g">✅ HRV stable — green light to train hard.</Alert>
           </>
         )}
 
@@ -292,7 +312,7 @@ export default function Dashboard() {
             <Lbl>Log a session</Lbl>
             <div style={card}>
               <Field label="Sport">
-                <select value={form.sport} onChange={e=>setForm({...form,sport:e.target.value})} style={input}>
+                <select value={form.sport} onChange={e=>setForm({...form,sport:e.target.value})} style={input2}>
                   <option value="swim">Swim</option><option value="bike">Bike</option>
                   <option value="run">Run</option><option value="push">Push (gym)</option>
                   <option value="pull">Pull (gym)</option><option value="legs">Legs (gym)</option>
@@ -300,12 +320,12 @@ export default function Dashboard() {
                 </select>
               </Field>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                <Field label="Distance (km)"><input type="number" inputMode="decimal" value={form.dist} onChange={e=>setForm({...form,dist:e.target.value})} placeholder="0.0" style={input} /></Field>
-                <Field label="Duration"><input value={form.dur} onChange={e=>setForm({...form,dur:e.target.value})} placeholder="1h 20m" style={input} /></Field>
+                <Field label="Distance (km)"><input type="number" inputMode="decimal" value={form.dist} onChange={e=>setForm({...form,dist:e.target.value})} placeholder="0.0" style={input2} /></Field>
+                <Field label="Duration"><input value={form.dur} onChange={e=>setForm({...form,dur:e.target.value})} placeholder="1h 20m" style={input2} /></Field>
               </div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                <Field label="Avg HR"><input type="number" inputMode="numeric" value={form.hr} onChange={e=>setForm({...form,hr:e.target.value})} placeholder="148" style={input} /></Field>
-                <Field label="Pace / speed"><input value={form.pace} onChange={e=>setForm({...form,pace:e.target.value})} placeholder="5:30/km" style={input} /></Field>
+                <Field label="Avg HR"><input type="number" inputMode="numeric" value={form.hr} onChange={e=>setForm({...form,hr:e.target.value})} placeholder="148" style={input2} /></Field>
+                <Field label="Pace / speed"><input value={form.pace} onChange={e=>setForm({...form,pace:e.target.value})} placeholder="5:30/km" style={input2} /></Field>
               </div>
               <Field label="Effort (RPE)">
                 <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
@@ -313,15 +333,15 @@ export default function Dashboard() {
                 </div>
               </Field>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                <Field label="Sleep (hrs)"><input type="number" inputMode="decimal" value={form.sleep} onChange={e=>setForm({...form,sleep:e.target.value})} placeholder="7.5" style={input} /></Field>
-                <Field label="Resting HR"><input type="number" inputMode="numeric" value={form.rhr} onChange={e=>setForm({...form,rhr:e.target.value})} placeholder="57" style={input} /></Field>
+                <Field label="Sleep (hrs)"><input type="number" inputMode="decimal" value={form.sleep} onChange={e=>setForm({...form,sleep:e.target.value})} placeholder="7.5" style={input2} /></Field>
+                <Field label="Resting HR"><input type="number" inputMode="numeric" value={form.rhr} onChange={e=>setForm({...form,rhr:e.target.value})} placeholder="57" style={input2} /></Field>
               </div>
-              <Field label="Notes"><textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="How did it feel?" style={{...input, minHeight:64, resize:"vertical"}} /></Field>
-              <button onClick={saveLog} style={btn}>Save session</button>
+              <Field label="Notes"><textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="How did it feel?" style={{...input2, minHeight:64, resize:"vertical"}} /></Field>
+              <button onClick={saveLog} style={primaryBtn}>Save session</button>
             </div>
             <Lbl>Manually logged sessions</Lbl>
             {logs.length === 0 ? (
-              <div style={{ textAlign:"center", padding:"30px 16px", color:"var(--txt3)", fontSize:13 }}>No manual sessions yet. Your Strava activities show on the Load tab. Use this for gym sessions Strava doesn't capture in detail.</div>
+              <div style={{ textAlign:"center", padding:"30px 16px", color:"var(--txt3)", fontSize:13 }}>No manual sessions yet. Your Strava activities show on the Load tab.</div>
             ) : logs.slice(0,12).map((w,i) => (
               <div key={i} style={logItem}>
                 <div style={{ display:"flex", alignItems:"center", gap:11 }}>
@@ -344,14 +364,49 @@ export default function Dashboard() {
 
         {tab === "coach" && (
           <>
-            <Lbl>Ask your coach</Lbl>
-            <div style={{ ...tip, marginBottom:14 }}>💬 Tap a question to copy it, then paste into the Claude chat where your coach can answer with full analysis of your data.</div>
-            {COACH_QS.map((q,i) => (
-              <button key={i} onClick={()=>copyQ(q[1])} style={coachQ}>
-                <b style={{ color:"var(--gold)", fontWeight:600 }}>{q[0]} → </b>{q[1]}
-              </button>
-            ))}
-            {copied && <div style={{ ...tip, textAlign:"center", color:"var(--green)" }}>✅ Copied — paste it in the Claude chat</div>}
+            <Lbl>Your coach</Lbl>
+            <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+              <button onClick={()=>setCoachMode("head")} style={chip(coachMode==="head")}>🧠 Head Coach</button>
+              <button onClick={()=>setCoachMode("team")} style={chip(coachMode==="team")}>👥 Team Meeting</button>
+            </div>
+
+            <div style={{ minHeight:200 }}>
+              {chat.length === 0 && (
+                <div style={{ ...tip, marginBottom:12 }}>
+                  {coachMode === "head"
+                    ? "Talk to Coach Vince. He reads your real Strava data before answering. Ask about today, your week, a decision, how you feel."
+                    : "Run a full team meeting — all your coaches weigh in, Vince makes the final call. Reads your real Strava data."}
+                </div>
+              )}
+              {chat.map((m, i) => (
+                <div key={i} style={{ marginBottom:12, display:"flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                  <div style={m.role === "user" ? userBubble : coachBubble}>
+                    {m.content}
+                  </div>
+                </div>
+              ))}
+              {sending && <div style={{ ...coachBubble, color:"var(--txt3)" }}>Coach is thinking…</div>}
+              <div ref={chatEndRef} />
+            </div>
+
+            {chat.length === 0 && (
+              <div style={{ marginTop:6 }}>
+                {QUICK_QS.map((q,i) => (
+                  <button key={i} onClick={()=>sendToCoach(q)} style={coachQ}>{q}</button>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display:"flex", gap:8, marginTop:14, position:"sticky", bottom:8 }}>
+              <input
+                value={input}
+                onChange={e=>setInput(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter") sendToCoach(); }}
+                placeholder={coachMode==="head" ? "Ask Coach Vince…" : "Bring it to the team…"}
+                style={{ flex:1, fontSize:15, padding:"12px 14px", border:"1px solid var(--line2)", borderRadius:12, background:"var(--bg2)", color:"var(--txt)", fontFamily:"inherit" }}
+              />
+              <button onClick={()=>sendToCoach()} disabled={sending} style={{ ...primaryBtn, width:"auto", padding:"12px 18px", marginTop:0, opacity: sending?0.5:1 }}>Send</button>
+            </div>
           </>
         )}
       </div>
@@ -367,7 +422,6 @@ export default function Dashboard() {
   );
 }
 
-// ---- derive weekly + longest stats from Strava activities ----
 function deriveStats(acts) {
   const base = { week: { swim:0, bike:0, run:0 }, longest: { swim:0, bike:0, run:0 } };
   if (!acts) return base;
@@ -383,7 +437,6 @@ function deriveStats(acts) {
   return base;
 }
 
-// ---- sub-components ----
 function Cd({ num, label, loc, accent }) {
   return (<div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:14, position:"relative", overflow:"hidden" }}>
     <div style={{ position:"absolute", top:0, right:0, width:60, height:60, borderRadius:"50%", background:accent, opacity:0.12 }} />
@@ -412,9 +465,11 @@ const tip = { fontSize:12, color:"var(--txt3)", lineHeight:1.6, background:"var(
 const mealCard = { background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:"13px 14px", marginBottom:10 };
 const logItem = { display:"flex", justifyContent:"space-between", alignItems:"center", padding:12, background:"var(--card)", border:"1px solid var(--line)", borderRadius:10, marginBottom:8 };
 const logBadge = { width:34, height:34, borderRadius:9, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 };
-const input = { width:"100%", fontSize:15, padding:"11px 13px", border:"1px solid var(--line2)", borderRadius:10, background:"var(--bg2)", color:"var(--txt)", fontFamily:"inherit" };
-const btn = { width:"100%", padding:14, fontSize:15, fontWeight:700, background:"var(--gold)", color:"#1a1206", border:"none", borderRadius:10, cursor:"pointer", marginTop:4 };
-const coachQ = { display:"block", width:"100%", textAlign:"left", padding:"13px 14px", background:"var(--card)", border:"1px solid var(--line)", borderRadius:10, fontSize:13, color:"var(--txt)", marginBottom:8, cursor:"pointer", fontFamily:"inherit", lineHeight:1.5 };
+const input2 = { width:"100%", fontSize:15, padding:"11px 13px", border:"1px solid var(--line2)", borderRadius:10, background:"var(--bg2)", color:"var(--txt)", fontFamily:"inherit" };
+const primaryBtn = { width:"100%", padding:14, fontSize:15, fontWeight:700, background:"var(--gold)", color:"#1a1206", border:"none", borderRadius:10, cursor:"pointer", marginTop:4 };
+const coachQ = { display:"block", width:"100%", textAlign:"left", padding:"12px 14px", background:"var(--card)", border:"1px solid var(--line)", borderRadius:10, fontSize:13, color:"var(--txt)", marginBottom:8, cursor:"pointer", fontFamily:"inherit", lineHeight:1.4 };
+const userBubble = { maxWidth:"82%", background:"var(--gold)", color:"#1a1206", padding:"10px 14px", borderRadius:"14px 14px 4px 14px", fontSize:14, lineHeight:1.5, whiteSpace:"pre-wrap" };
+const coachBubble = { maxWidth:"90%", background:"var(--card)", border:"1px solid var(--line)", color:"var(--txt)", padding:"12px 14px", borderRadius:"14px 14px 14px 4px", fontSize:14, lineHeight:1.6, whiteSpace:"pre-wrap" };
 const nav = { position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:480, background:"rgba(14,27,42,0.92)", backdropFilter:"blur(16px)", WebkitBackdropFilter:"blur(16px)", borderTop:"1px solid var(--line)", display:"flex", padding:"8px 6px calc(env(safe-area-inset-bottom) + 8px)", zIndex:100 };
 
 function chip(on) { return { padding:"8px 14px", border:`1px solid ${on?"var(--gold)":"var(--line2)"}`, borderRadius:99, fontSize:12, fontWeight:600, background:on?"var(--gold)":"transparent", color:on?"#1a1206":"var(--txt2)", cursor:"pointer", fontFamily:"inherit" }; }
