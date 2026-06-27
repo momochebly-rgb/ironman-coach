@@ -93,7 +93,7 @@ function summarizeWellness(records) {
 
 export async function POST(request) {
   try {
-    const { message, mode, history } = await request.json();
+    const { message, mode, history, injuries } = await request.json();
     if (!message || !message.trim()) {
       return Response.json({ ok: false, error: "Empty message" }, { status: 400 });
     }
@@ -104,9 +104,16 @@ export async function POST(request) {
     let wellnessSummary = "Wellness (HRV/sleep) data unavailable right now.";
     try { wellnessSummary = summarizeWellness(await getWellness(14)); } catch {}
 
+    let injurySummary = "No active injuries or niggles logged.";
+    if (Array.isArray(injuries) && injuries.length) {
+      injurySummary = injuries.map((a) =>
+        `${a.part}: pain ${a.pain}/10 (${a.when}), trend ${a.trend}, last logged ${a.date}`
+      ).join("; ");
+    }
+
     const today = new Date().toISOString().slice(0, 10);
     const persona = mode === "team" ? TEAM_MEETING : HEAD_COACH;
-    const system = `${persona}\n\n${SCHEDULE_RULES}\n\nToday's date: ${today}\n\n--- ATHLETE PROFILE ---\n${ATHLETE_PROFILE}\n\n--- REAL RECENT STRAVA DATA ---\n${stravaSummary}\n\n--- REAL RECOVERY DATA (intervals.icu / COROS) ---\n${wellnessSummary}`;
+    const system = `${persona}\n\n${SCHEDULE_RULES}\n\nToday's date: ${today}\n\n--- ATHLETE PROFILE ---\n${ATHLETE_PROFILE}\n\n--- REAL RECENT ACTIVITY DATA ---\n${stravaSummary}\n\n--- REAL RECOVERY DATA (intervals.icu / COROS) ---\n${wellnessSummary}\n\n--- ACTIVE INJURIES / NIGGLES (logged by Maroun) ---\n${injurySummary}\n\nIMPORTANT: If there are active injuries, factor them into all training advice. Dr. Hale should weigh in on any injury with pain >= 4 or a worsening trend.`;
 
     const messages = [];
     if (Array.isArray(history)) {

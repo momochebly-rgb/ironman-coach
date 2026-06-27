@@ -2,6 +2,9 @@
 import { useState, useEffect, useRef } from "react";
 import { loadSchedule, saveSchedule, applyChanges, ymd } from "../lib/schedule";
 import { WORKOUTS, workoutKeyFor } from "../lib/workouts";
+import { loadInjuries, addInjury, deleteInjury, byPart, activeNiggles, BODY_PARTS, WHEN_OPTIONS } from "../lib/injuries";
+import { computeReadiness } from "../lib/readiness";
+import { buildWeekly } from "../lib/weekly";
 
 const MARATHON = new Date("2026-11-29");
 const IRONMAN = new Date("2027-09-19");
@@ -98,6 +101,11 @@ export default function Dashboard() {
   const [editForm, setEditForm] = useState({ sport:"run", title:"", detail:"" });
   const [undo, setUndo] = useState(null); // { prevSched, summary }
 
+  // Injuries / niggles
+  const [injuries, setInjuries] = useState([]);
+  const [injForm, setInjForm] = useState({ part: "Calf", pain: 3, when: "rest", note: "" });
+  const [showInjForm, setShowInjForm] = useState(false);
+
   // Coach chat
   const [coachMode, setCoachMode] = useState("head");
   const [chat, setChat] = useState([]);
@@ -110,6 +118,7 @@ export default function Dashboard() {
     setNow(d);
     setCalMonth({ y: d.getFullYear(), m: d.getMonth() });
     setSched(loadSchedule());
+    setInjuries(loadInjuries());
     // fetch wellness once on mount for the header badge
     fetch("/api/wellness").then(r => r.json()).then(d => {
       if (d.ok) setWell(d.wellness); else setWellErr(d.error || "Could not load wellness");
@@ -141,6 +150,16 @@ export default function Dashboard() {
   const greet = now ? (now.getHours() < 12 ? "Good morning" : now.getHours() < 18 ? "Good afternoon" : "Good evening") : "Good morning";
   const dM = now ? Math.max(0, Math.ceil((MARATHON - now) / 864e5)) : "—";
   const dI = now ? Math.max(0, Math.ceil((IRONMAN - now) / 864e5)) : "—";
+
+  function logInjury() {
+    const next = addInjury(injForm);
+    setInjuries(next);
+    setShowInjForm(false);
+    setInjForm({ part: "Calf", pain: 3, when: "rest", note: "" });
+  }
+  function removeInjury(id) {
+    setInjuries(deleteInjury(id));
+  }
 
   function shiftMonth(delta) {
     if (!calMonth) return;
@@ -175,7 +194,7 @@ export default function Dashboard() {
       const res = await fetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, mode: coachMode, history: chat }),
+        body: JSON.stringify({ message: msg, mode: coachMode, history: chat, injuries: activeNiggles(injuries) }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -262,33 +281,48 @@ export default function Dashboard() {
               </div>
             ) : <div style={{ ...tip }}>Rest day — nothing scheduled. Enjoy it.</div>}
 
-            {/* RECOVERY SNAPSHOT */}
-            <Lbl>Recovery snapshot</Lbl>
+            {/* READINESS CHECK */}
+            <Lbl>Today's readiness</Lbl>
             {(() => {
-              const latest = well && well.find(r => r.hrv != null);
-              const hrv = latest ? latest.hrv : null;
-              const shr = latest ? (latest.sleepingHr ?? latest.restingHr) : null;
-              const slp = latest ? latest.sleepHrs : null;
-              const hrvState = hrv == null ? "—" : hrv < 46 ? "Low" : hrv > 56 ? "Elevated" : "In range";
-              const hrvColor = hrv == null ? "var(--txt3)" : hrv < 46 ? "var(--red)" : "var(--green)";
+              const r = computeReadiness(well, activeNiggles(injuries));
+              if (r.level === "none") {
+                return <div style={{ ...tip }}>{r.reasons[0]}</div>;
+              }
+              const colMap = { green:"var(--green)", yellow:"var(--amber)", red:"var(--red)" };
+              const bgMap = { green:"rgba(93,203,142,0.12)", yellow:"rgba(242,193,78,0.12)", red:"rgba(232,104,95,0.12)" };
+              const col = colMap[r.level];
               return (
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:4 }}>
-                  <Mt v={hrv != null ? hrv : "—"} l="HRV ms" c={hrvColor} />
-                  <Mt v={shr != null ? shr : "—"} l="sleep HR" c="#F2A0A0" />
-                  <Mt v={slp != null ? slp : "—"} l="sleep h" c="#9CB8F2" />
+                <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:16, overflow:"hidden", marginBottom:8 }}>
+                  <div style={{ background:bgMap[r.level], padding:"16px 16px 14px", display:"flex", alignItems:"center", gap:14 }}>
+                    {/* score ring */}
+                    <div style={{ position:"relative", width:64, height:64, flexShrink:0 }}>
+                      <svg viewBox="0 0 36 36" style={{ width:64, height:64, transform:"rotate(-90deg)" }}>
+                        <circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--line2)" strokeWidth="3" />
+                        <circle cx="18" cy="18" r="15.9" fill="none" stroke={col} strokeWidth="3"
+                          strokeDasharray={`${r.score} 100`} strokeLinecap="round" />
+                      </svg>
+                      <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                        <span className="archivo" style={{ fontSize:18, fontWeight:800, color:col }}>{r.score}</span>
+                      </div>
+                    </div>
+                    <div style={{ minWidth:0 }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:col, textTransform:"uppercase", letterSpacing:"0.05em" }}>
+                        {r.level === "green" ? "● Ready" : r.level === "yellow" ? "● Caution" : "● Back off"}
+                      </div>
+                      <div className="archivo" style={{ fontSize:17, fontWeight:700, marginTop:2 }}>{r.headline}</div>
+                    </div>
+                  </div>
+                  <div style={{ padding:"12px 16px" }}>
+                    {r.reasons.map((reason, i) => (
+                      <div key={i} style={{ display:"flex", gap:8, marginBottom: i < r.reasons.length-1 ? 7 : 0 }}>
+                        <span style={{ color:col, flexShrink:0, fontSize:13 }}>•</span>
+                        <span style={{ fontSize:12, color:"var(--txt2)", lineHeight:1.45 }}>{reason}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               );
             })()}
-            <div style={{ ...tip, marginTop:8 }}>
-              {(() => {
-                const latest = well && well.find(r => r.hrv != null);
-                if (!latest || latest.hrv == null) return "Connect your wellness data to see today's readiness.";
-                const hrv = latest.hrv;
-                if (hrv < 46) return "⚠️ HRV below your range — favour easy/recovery today.";
-                if (hrv > 56) return "✅ HRV elevated — you're well recovered.";
-                return "✅ HRV in your normal range — good to train as planned.";
-              })()}
-            </div>
 
             <button style={{ ...primaryBtn, marginTop:14 }} onClick={() => { setTab("coach"); window.scrollTo(0,0); }}>💬 Ask your coach about today</button>
           </>
@@ -312,7 +346,7 @@ export default function Dashboard() {
 
             {/* Weekday headers */}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:5, marginBottom:6 }}>
-              {["S","M","T","W","T","F","S"].map((d,i) => (
+              {["M","T","W","T","F","S","S"].map((d,i) => (
                 <div key={i} style={{ textAlign:"center", fontSize:10, fontWeight:700, color:"var(--txt3)" }}>{d}</div>
               ))}
             </div>
@@ -411,6 +445,57 @@ export default function Dashboard() {
 
         {tab === "load" && (
           <>
+            {/* WEEKLY SUMMARY */}
+            <Lbl>This week vs last</Lbl>
+            {acts ? (() => {
+              const wk = buildWeekly(acts, well);
+              const t = wk.thisWeek, l = wk.lastWeek;
+              const totalKm = t.swimKm + t.bikeKm + t.runKm;
+              function deltaBadge(d) {
+                if (d == null) return null;
+                const up = d >= 0;
+                const col = up ? "var(--green)" : "var(--amber)";
+                return <span style={{ fontSize:11, fontWeight:700, color:col }}>{up?"▲":"▼"} {Math.abs(Math.round(d))}%</span>;
+              }
+              const hrs = Math.floor(t.timeMin/60), mins = t.timeMin%60;
+              return (
+                <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:16, padding:16, marginBottom:8 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:12 }}>
+                    <span style={{ fontSize:12, color:"var(--txt2)" }}>{t.count} sessions · {hrs}h {mins}m</span>
+                    {deltaBadge(wk.deltas.timeMin)}
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:12 }}>
+                    <Mt v={t.swimKm.toFixed(1)} l="swim km" c="#8FC4F2" />
+                    <Mt v={t.bikeKm.toFixed(0)} l="bike km" c="#B3E07F" />
+                    <Mt v={t.runKm.toFixed(1)} l="run km" c="#F2C48F" />
+                  </div>
+                  <div style={{ display:"flex", justifyContent:"space-between", padding:"10px 0", borderTop:"1px solid var(--line)" }}>
+                    <span style={{ fontSize:12, color:"var(--txt2)" }}>Training load</span>
+                    <span style={{ fontSize:12, fontWeight:600 }}>{Math.round(t.load)} {deltaBadge(wk.deltas.load)}</span>
+                  </div>
+                  <div style={{ display:"flex", justifyContent:"space-between", paddingTop:6 }}>
+                    <span style={{ fontSize:12, color:"var(--txt2)" }}>Total distance</span>
+                    <span style={{ fontSize:12, fontWeight:600 }}>{totalKm.toFixed(1)} km {deltaBadge(wk.deltas.totalKm)}</span>
+                  </div>
+                  {wk.wellnessAvg.fitness != null && (
+                    <div style={{ display:"flex", justifyContent:"space-between", paddingTop:6 }}>
+                      <span style={{ fontSize:12, color:"var(--txt2)" }}>Fitness (CTL)</span>
+                      <span style={{ fontSize:12, fontWeight:600 }}>{Math.round(wk.wellnessAvg.fitness)}</span>
+                    </div>
+                  )}
+                  <div style={{ ...tip, marginTop:12 }}>
+                    {(() => {
+                      const d = wk.deltas.load;
+                      if (d == null) return "First week of data — next week we'll compare trends.";
+                      if (d > 30) return "⚠️ Big load jump from last week. Watch recovery — don't spike too fast.";
+                      if (d < -30) return "Lighter week than last — fine if it's a recovery week or you're managing the niggle.";
+                      return "Load is progressing steadily week to week — good consistency.";
+                    })()}
+                  </div>
+                </div>
+              );
+            })() : <div style={{ ...tip }}>Loading your week…</div>}
+
             <Lbl>Recovery status</Lbl>
             {(() => {
               const latest = well && well.find(r => r.hrv != null);
@@ -468,6 +553,73 @@ export default function Dashboard() {
                 ))}
               </>);
             })()}
+          </>
+        )}
+
+        {tab === "body" && (
+          <>
+            <Lbl>Injury & niggle tracker</Lbl>
+            {(() => {
+              const active = activeNiggles(injuries);
+              if (!active.length) return <div style={{ ...tip, marginBottom:12 }}>No active niggles logged. Tap + to log one if something's bothering you.</div>;
+              return (
+                <div style={{ marginBottom:6 }}>
+                  {active.map((a,i) => {
+                    const col = a.trend === "improving" ? "var(--green)" : a.trend === "worsening" ? "var(--red)" : "var(--amber)";
+                    const arrow = a.trend === "improving" ? "↓ improving" : a.trend === "worsening" ? "↑ worsening" : "→ steady";
+                    return (
+                      <div key={i} style={{ ...card, marginBottom:10, borderLeft:`3px solid ${col}` }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                          <div>
+                            <div className="archivo" style={{ fontSize:16, fontWeight:700 }}>{a.part}</div>
+                            <div style={{ fontSize:11, color:"var(--txt2)", marginTop:2 }}>Hurts: {WHEN_OPTIONS.find(w=>w.v===a.when)?.label || a.when} · last logged {a.date.slice(5)}</div>
+                          </div>
+                          <div style={{ textAlign:"right" }}>
+                            <div className="archivo" style={{ fontSize:24, fontWeight:800, color:col }}>{a.pain}<span style={{ fontSize:12, color:"var(--txt3)" }}>/10</span></div>
+                            <div style={{ fontSize:10, color:col, fontWeight:600 }}>{arrow}</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            <button style={{ ...primaryBtn, marginTop:4 }} onClick={()=>setShowInjForm(true)}>+ Log a niggle</button>
+
+            {/* per-part history with trend charts */}
+            {(() => {
+              const grouped = byPart(injuries);
+              const parts = Object.keys(grouped);
+              if (!parts.length) return null;
+              return parts.map((part) => {
+                const entries = grouped[part];
+                const asc = [...entries].reverse();
+                const data = asc.map(e => ({ date: e.date, value: e.pain }));
+                return (
+                  <div key={part} style={{ margintop:8 }}>
+                    <Lbl>{part} — pain history</Lbl>
+                    <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:14 }}>
+                      <LineChart data={data} color="var(--red)" unit="/10" band={[0,2]} />
+                      <div style={{ marginTop:8 }}>
+                        {entries.slice(0,5).map((e) => (
+                          <div key={e.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderTop:"1px solid var(--line)" }}>
+                            <div style={{ fontSize:12 }}>
+                              <b>{e.date.slice(5)}</b> · {e.pain}/10 · {WHEN_OPTIONS.find(w=>w.v===e.when)?.label || e.when}
+                              {e.note ? <div style={{ fontSize:11, color:"var(--txt3)", marginTop:1 }}>{e.note}</div> : null}
+                            </div>
+                            <button onClick={()=>removeInjury(e.id)} style={{ background:"none", border:"none", color:"var(--txt3)", fontSize:16, cursor:"pointer" }}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+
+            <div style={{ ...tip, marginTop:14 }}>🩺 Your coaches read active niggles automatically, so they'll factor these into training advice. Pain trending toward 0 with a green band is what you want.</div>
           </>
         )}
 
@@ -665,8 +817,49 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* LOG NIGGLE MODAL */}
+      {showInjForm && (
+        <div style={modalBg} onClick={()=>setShowInjForm(false)}>
+          <div style={modalCard} onClick={e=>e.stopPropagation()}>
+            <div className="archivo" style={{ fontSize:17, fontWeight:700, marginBottom:12 }}>Log a niggle</div>
+            <Field label="Body part">
+              <select value={injForm.part} onChange={e=>setInjForm({...injForm,part:e.target.value})} style={input2}>
+                {BODY_PARTS.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </Field>
+            <Field label={`Pain level: ${injForm.pain}/10`}>
+              <input type="range" min="0" max="10" step="1" value={injForm.pain}
+                onChange={e=>setInjForm({...injForm,pain:parseInt(e.target.value)})}
+                style={{ width:"100%", accentColor:"var(--red)" }} />
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"var(--txt3)" }}>
+                <span>0 none</span><span>5 moderate</span><span>10 severe</span>
+              </div>
+            </Field>
+            <Field label="When does it hurt?">
+              <div style={{ display:"flex", gap:8 }}>
+                {WHEN_OPTIONS.map(w => (
+                  <button key={w.v} onClick={()=>setInjForm({...injForm,when:w.v})}
+                    style={{ flex:1, padding:"10px 6px", borderRadius:10, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
+                      border:`1px solid ${injForm.when===w.v?"var(--gold)":"var(--line2)"}`,
+                      background: injForm.when===w.v?"var(--gold)":"transparent",
+                      color: injForm.when===w.v?"#1a1206":"var(--txt2)" }}>{w.label}</button>
+                ))}
+              </div>
+            </Field>
+            <Field label="Note (optional)">
+              <textarea value={injForm.note} onChange={e=>setInjForm({...injForm,note:e.target.value})}
+                placeholder="e.g. sharp at back of knee on stairs" style={{...input2, minHeight:60, resize:"vertical"}} />
+            </Field>
+            <div style={{ display:"flex", gap:8, marginTop:6 }}>
+              <button onClick={logInjury} style={{ ...primaryBtn, marginTop:0 }}>Save</button>
+              <button onClick={()=>setShowInjForm(false)} style={{ ...ghostBtn, marginTop:0, width:"auto", padding:"0 18px" }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={nav}>
-        {[["today","🏠","Today"],["calendar","📅","Calendar"],["wellness","❤️","Wellness"],["load","📊","Load"],["coach","💬","Coach"]].map(([id,ic,lbl]) => (
+        {[["today","🏠","Today"],["calendar","📅","Calendar"],["wellness","❤️","Wellness"],["body","🩹","Body"],["load","📊","Load"],["coach","💬","Coach"]].map(([id,ic,lbl]) => (
           <button key={id} onClick={()=>{ setTab(id); window.scrollTo(0,0); }} style={navI(tab===id)}>
             <span style={{ fontSize:20 }}>{ic}</span><span>{lbl}</span>
           </button>
@@ -682,10 +875,11 @@ function buildMonthCells(calMonth, sched) {
   const { y, m } = calMonth;
   const first = new Date(y, m, 1);
   const startDow = first.getDay(); // 0=Sun
+  const startOffset = (startDow === 0 ? 6 : startDow - 1); // Monday-first offset
   const daysInMonth = new Date(y, m + 1, 0).getDate();
   const todayKey = ymd(new Date());
   const cells = [];
-  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let i = 0; i < startOffset; i++) cells.push(null);
   for (let day = 1; day <= daysInMonth; day++) {
     const dd = String(day).padStart(2, "0");
     const mm = String(m + 1).padStart(2, "0");
