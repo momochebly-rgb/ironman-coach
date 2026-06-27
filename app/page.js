@@ -224,14 +224,29 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, padding:"6px 18px 0" }}>
-        <Cd num={dM} label="days to marathon" loc="Beirut · Nov 29, 2026" accent="var(--run)" />
-        <Cd num={dI} label="days to Ironman" loc="Italy · Sep 2027" accent="var(--swim)" />
-      </div>
-
       <div style={{ padding: 18 }}>
         {tab === "today" && (
           <>
+            {/* RACE COUNTDOWN CARDS with banners */}
+            <RaceCard
+              img="/beirut.png"
+              fallbackBg="linear-gradient(135deg,#C8102E,#7A0A1C)"
+              name="Beirut Marathon"
+              loc="Beirut, Lebanon"
+              dateLabel="Nov 29, 2026"
+              days={dM}
+              accent="var(--run)"
+            />
+            <RaceCard
+              img="/ironman.png"
+              fallbackBg="linear-gradient(135deg,#1A1A1A,#000)"
+              name="IRONMAN Italy"
+              loc="Emilia-Romagna · Cervia"
+              dateLabel="Sep 2027"
+              days={dI}
+              accent="var(--swim)"
+            />
+
             <Lbl>Today's session</Lbl>
             {today ? (
               <div style={card}>
@@ -243,9 +258,38 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div style={{ ...focus, whiteSpace:"pre-line" }}>{today.detail}</div>
-                <button style={{ ...ghostBtn, marginTop:12 }} onClick={()=>{ setTab("calendar"); openEdit(todayKey); }}>Edit today</button>
+                <button style={{ ...ghostBtn, marginTop:12 }} onClick={()=>{ setTab("calendar"); openEdit(todayKey); }}>View full workout & nutrition</button>
               </div>
             ) : <div style={{ ...tip }}>Rest day — nothing scheduled. Enjoy it.</div>}
+
+            {/* RECOVERY SNAPSHOT */}
+            <Lbl>Recovery snapshot</Lbl>
+            {(() => {
+              const latest = well && well.find(r => r.hrv != null);
+              const hrv = latest ? latest.hrv : null;
+              const shr = latest ? (latest.sleepingHr ?? latest.restingHr) : null;
+              const slp = latest ? latest.sleepHrs : null;
+              const hrvState = hrv == null ? "—" : hrv < 46 ? "Low" : hrv > 56 ? "Elevated" : "In range";
+              const hrvColor = hrv == null ? "var(--txt3)" : hrv < 46 ? "var(--red)" : "var(--green)";
+              return (
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:4 }}>
+                  <Mt v={hrv != null ? hrv : "—"} l="HRV ms" c={hrvColor} />
+                  <Mt v={shr != null ? shr : "—"} l="sleep HR" c="#F2A0A0" />
+                  <Mt v={slp != null ? slp : "—"} l="sleep h" c="#9CB8F2" />
+                </div>
+              );
+            })()}
+            <div style={{ ...tip, marginTop:8 }}>
+              {(() => {
+                const latest = well && well.find(r => r.hrv != null);
+                if (!latest || latest.hrv == null) return "Connect your wellness data to see today's readiness.";
+                const hrv = latest.hrv;
+                if (hrv < 46) return "⚠️ HRV below your range — favour easy/recovery today.";
+                if (hrv > 56) return "✅ HRV elevated — you're well recovered.";
+                return "✅ HRV in your normal range — good to train as planned.";
+              })()}
+            </div>
+
             <button style={{ ...primaryBtn, marginTop:14 }} onClick={() => { setTab("coach"); window.scrollTo(0,0); }}>💬 Ask your coach about today</button>
           </>
         )}
@@ -674,6 +718,34 @@ function Cd({ num, label, loc, accent }) {
     <div style={{ fontSize:11, color:"var(--txt2)", marginTop:5, fontWeight:500 }}>{label}</div>
     <div style={{ fontSize:10, color:"var(--txt3)", marginTop:1 }}>{loc}</div>
   </div>);
+}
+
+function RaceCard({ img, fallbackBg, name, loc, dateLabel, days, accent }) {
+  const [imgOk, setImgOk] = useState(true);
+  return (
+    <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:16, overflow:"hidden", marginBottom:12 }}>
+      {/* banner */}
+      <div style={{ height:96, background: fallbackBg, display:"flex", alignItems:"center", justifyContent:"center", position:"relative" }}>
+        {imgOk ? (
+          <img src={img} alt={name} onError={()=>setImgOk(false)}
+            style={{ maxHeight:"78%", maxWidth:"82%", objectFit:"contain" }} />
+        ) : (
+          <span className="archivo" style={{ color:"#fff", fontSize:20, fontWeight:800, opacity:0.92, letterSpacing:"0.02em" }}>{name}</span>
+        )}
+      </div>
+      {/* info row */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 14px" }}>
+        <div style={{ minWidth:0 }}>
+          <div className="archivo" style={{ fontSize:15, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{name}</div>
+          <div style={{ fontSize:11, color:"var(--txt2)", marginTop:1 }}>{loc} · {dateLabel}</div>
+        </div>
+        <div style={{ textAlign:"right", flexShrink:0, paddingLeft:10 }}>
+          <div className="archivo" style={{ fontSize:26, fontWeight:800, lineHeight:1, color:accent }}>{days}</div>
+          <div style={{ fontSize:10, color:"var(--txt3)" }}>days to go</div>
+        </div>
+      </div>
+    </div>
+  );
 }
 function Lbl({ children }) { return <div style={{ fontSize:11, fontWeight:600, color:"var(--txt3)", textTransform:"uppercase", letterSpacing:"0.08em", margin:"18px 0 10px" }}>{children}</div>; }
 
