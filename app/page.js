@@ -808,6 +808,7 @@ export default function Dashboard() {
                   {openAct.sport==="bike" && watts && <><Lbl>Power</Lbl><StreamChart data={watts} xdist={dist} color="var(--bike)" unit="W" /></>}
                   {vel && <><Lbl>{openAct.sport==="run"?"Pace":"Speed"}</Lbl><StreamChart data={vel.map(v=>+(v*3.6).toFixed(1))} xdist={dist} color="var(--swim)" unit="km/h" /></>}
                   {alt && <><Lbl>Elevation</Lbl><StreamChart data={alt} xdist={dist} color="var(--push)" unit="m" fill /></>}
+                  <ActivityAnalysis streams={s} sport={openAct.sport} />
                   {!latlng && !hr && !alt && !vel && !watts && <div style={{ ...tip }}>No detailed streams available for this activity.</div>}
                 </>
               );
@@ -1033,6 +1034,118 @@ function MapView({ latlng, sport }) {
 }
 
 // SVG area/line chart for an activity stream. data = number[]; xdist optional for x-axis.
+// Maroun's COROS HR zones for client-side activity analysis
+const HR_ZONES_UI = [
+  { name: "Recovery",            max: 149, color: "#5FA8E8" },
+  { name: "Aerobic Endurance",   max: 168, color: "#4ADE80" },
+  { name: "Aerobic Power",       max: 178, color: "#A3E635" },
+  { name: "Threshold",           max: 191, color: "#F6B73C" },
+  { name: "Anaerobic Endurance", max: 198, color: "#FB923C" },
+  { name: "Anaerobic Power",     max: 999, color: "#FF5D52" },
+];
+function fmtPaceUI(sec) { const m = Math.floor(sec/60), s = Math.round(sec%60); return `${m}:${String(s).padStart(2,"0")}`; }
+function fmtClock(sec) { sec=Math.round(sec); const m=Math.floor(sec/60), s=sec%60; return `${m}:${String(s).padStart(2,"0")}`; }
+
+function ActivityAnalysis({ streams, sport }) {
+  const time = streams.time || null;
+  const dist = streams.distance || null;
+  const hr = streams.heartrate || streams.heart_rate || null;
+
+  // HR zone distribution
+  let zones = null;
+  if (hr && time && hr.length === time.length && hr.length > 1) {
+    const secs = new Array(HR_ZONES_UI.length).fill(0);
+    for (let i = 1; i < hr.length; i++) {
+      const dt = time[i] - time[i-1];
+      if (dt <= 0 || dt > 30 || hr[i] == null) continue;
+      let zi = HR_ZONES_UI.findIndex(z => hr[i] <= z.max);
+      if (zi < 0) zi = HR_ZONES_UI.length - 1;
+      secs[zi] += dt;
+    }
+    const total = secs.reduce((a,b)=>a+b,0);
+    if (total > 0) zones = HR_ZONES_UI.map((z,i)=>({ ...z, sec: secs[i], pct: Math.round(secs[i]/total*100) }));
+  }
+
+  // splits
+  let splits = null, splitLabel = "";
+  if (dist && time && dist.length === time.length && dist.length > 2) {
+    const splitM = sport === "swim" ? 100 : sport === "bike" ? 5000 : 1000;
+    splitLabel = sport === "swim" ? "per 100m" : sport === "bike" ? "per 5km" : "per km";
+    const out = [];
+    let nextMark = splitM, lastTime = time[0]||0, lastIdx = 0;
+    for (let i = 1; i < dist.length; i++) {
+      if (dist[i] >= nextMark) {
+        const segTime = time[i] - lastTime;
+        let hrAvg = null;
+        if (hr) { let sum=0,n=0; for (let j=lastIdx;j<=i;j++){ if(hr[j]!=null){sum+=hr[j];n++;} } if(n) hrAvg=Math.round(sum/n); }
+        out.push({ idx: out.length+1, segTime, hrAvg });
+        lastTime = time[i]; lastIdx = i; nextMark += splitM;
+        if (out.length >= 40) break;
+      }
+    }
+    if (out.length) splits = out;
+  }
+
+  if (!zones && !splits) return null;
+  // for the splits bar scale
+  const maxSeg = splits ? Math.max(...splits.map(s=>s.segTime)) : 1;
+  const minSeg = splits ? Math.min(...splits.map(s=>s.segTime)) : 1;
+
+  return (
+    <>
+      {zones && (
+        <>
+          <Lbl>Time in HR zones</Lbl>
+          <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:12, padding:14, marginBottom:12 }}>
+            {/* stacked bar */}
+            <div style={{ display:"flex", height:10, borderRadius:99, overflow:"hidden", marginBottom:12 }}>
+              {zones.filter(z=>z.pct>0).map((z,i)=>(
+                <div key={i} style={{ width:`${z.pct}%`, background:z.color }} title={`${z.name} ${z.pct}%`} />
+              ))}
+            </div>
+            {zones.filter(z=>z.sec>0).map((z,i)=>(
+              <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  <span style={{ width:10, height:10, borderRadius:3, background:z.color, flexShrink:0 }} />
+                  <span style={{ fontSize:12, color:"var(--txt2)" }}>{z.name}</span>
+                </div>
+                <span style={{ fontSize:12, fontWeight:600 }}>{z.pct}% · {fmtClock(z.sec)}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {splits && (
+        <>
+          <Lbl>Splits ({splitLabel})</Lbl>
+          <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:12, padding:"6px 14px 12px", marginBottom:12 }}>
+            {splits.map((s,i)=>{
+              let perf;
+              if (sport === "bike") { const splitM = 5000; const kmh = (splitM/1000)/(s.segTime/3600); perf = `${kmh.toFixed(1)} km/h`; }
+              else if (sport === "swim") perf = `${fmtPaceUI(s.segTime)}/100m`;
+              else perf = `${fmtPaceUI(s.segTime)}/km`;
+              // bar: faster (lower segTime) = longer bar for run/swim; for bike, higher speed=longer
+              let frac;
+              if (sport === "bike") frac = maxSeg === minSeg ? 1 : (maxSeg - s.segTime) / (maxSeg - minSeg) * 0.7 + 0.3;
+              else frac = maxSeg === minSeg ? 1 : (maxSeg - s.segTime) / (maxSeg - minSeg) * 0.7 + 0.3;
+              return (
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 0", borderTop: i>0?"1px solid var(--line)":"none" }}>
+                  <span style={{ fontSize:11, color:"var(--txt3)", width:18, flexShrink:0 }}>{s.idx}</span>
+                  <div style={{ flex:1, height:18, background:"var(--bg2)", borderRadius:6, overflow:"hidden", position:"relative" }}>
+                    <div style={{ position:"absolute", inset:0, width:`${Math.round(frac*100)}%`, background:"var(--gold)", opacity:0.25 }} />
+                    <span style={{ position:"absolute", left:8, top:0, lineHeight:"18px", fontSize:11, fontWeight:600 }}>{perf}</span>
+                  </div>
+                  {s.hrAvg && <span style={{ fontSize:11, color:"var(--txt2)", width:48, textAlign:"right", flexShrink:0 }}>{s.hrAvg} bpm</span>}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 function StreamChart({ data, color, unit, fill }) {
   if (!data || data.length < 2) return null;
   // downsample to ~200 points for performance

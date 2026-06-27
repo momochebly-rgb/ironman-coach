@@ -3,7 +3,7 @@
 // Now supports SCHEDULE CHANGES: the coach can append a hidden JSON block
 // that the app parses and applies to the calendar (with undo).
 
-import { getIntervalsActivities } from "../../../lib/intervals";
+import { getIntervalsActivities, describeActivityForCoach } from "../../../lib/intervals";
 import { getWellness } from "../../../lib/intervals";
 
 const ATHLETE_PROFILE = `
@@ -99,7 +99,19 @@ export async function POST(request) {
     }
 
     let stravaSummary = "Activity data unavailable right now.";
-    try { stravaSummary = summarizeActivities(await getIntervalsActivities(30)); } catch {}
+    let detailedActivities = "";
+    try {
+      const acts = await getIntervalsActivities(30);
+      stravaSummary = summarizeActivities(acts);
+      // Pull DETAILED splits + HR zones for the most recent 3 activities,
+      // so the coaches can talk about laps/splits, not just the shell.
+      const recent = acts.slice(0, 3);
+      const details = [];
+      for (const a of recent) {
+        try { details.push(await describeActivityForCoach(a)); } catch {}
+      }
+      if (details.length) detailedActivities = details.join("\n\n");
+    } catch {}
 
     let wellnessSummary = "Wellness (HRV/sleep) data unavailable right now.";
     try { wellnessSummary = summarizeWellness(await getWellness(14)); } catch {}
@@ -113,7 +125,10 @@ export async function POST(request) {
 
     const today = new Date().toISOString().slice(0, 10);
     const persona = mode === "team" ? TEAM_MEETING : HEAD_COACH;
-    const system = `${persona}\n\n${SCHEDULE_RULES}\n\nToday's date: ${today}\n\n--- ATHLETE PROFILE ---\n${ATHLETE_PROFILE}\n\n--- REAL RECENT ACTIVITY DATA ---\n${stravaSummary}\n\n--- REAL RECOVERY DATA (intervals.icu / COROS) ---\n${wellnessSummary}\n\n--- ACTIVE INJURIES / NIGGLES (logged by Maroun) ---\n${injurySummary}\n\nIMPORTANT: If there are active injuries, factor them into all training advice. Dr. Hale should weigh in on any injury with pain >= 4 or a worsening trend.`;
+    const detailBlock = detailedActivities
+      ? `\n\n--- DETAILED RECENT ACTIVITIES (splits, laps & HR zones — use these for analysis) ---\n${detailedActivities}`
+      : "";
+    const system = `${persona}\n\n${SCHEDULE_RULES}\n\nToday's date: ${today}\n\n--- ATHLETE PROFILE ---\n${ATHLETE_PROFILE}\n\n--- REAL RECENT ACTIVITY DATA (last 30, summary) ---\n${stravaSummary}${detailBlock}\n\n--- REAL RECOVERY DATA (intervals.icu / COROS) ---\n${wellnessSummary}\n\n--- ACTIVE INJURIES / NIGGLES (logged by Maroun) ---\n${injurySummary}\n\nIMPORTANT: If there are active injuries, factor them into all training advice. Dr. Hale should weigh in on any injury with pain >= 4 or a worsening trend. When analysing a session, USE the detailed splits and HR zones above — comment on pacing consistency, zone distribution, and fade, not just totals.`;
 
     const messages = [];
     if (Array.isArray(history)) {
