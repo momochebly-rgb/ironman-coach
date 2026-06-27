@@ -1,40 +1,96 @@
-@import "tailwindcss";
+/* app/globals.css — "Tidewater Dawn" theme
+   Cool ink-teal base (open water at dawn) + sunrise coral accent.
+   Every color is a CSS variable so the whole app reskins from here. */
+
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg: #0E1B2A;
-  --bg2: #16283D;
-  --card: #1B3047;
-  --card2: #22405C;
-  --line: rgba(255,255,255,0.08);
-  --line2: rgba(255,255,255,0.15);
-  --txt: #F2F6FA;
-  --txt2: #9DB2C8;
-  --txt3: #6B8299;
-  --swim: #3D9BE9;
-  --bike: #7FC241;
-  --run: #F2A03D;
-  --push: #9C7FE8;
-  --legs: #4FB0E8;
-  --gold: #F2C14E;
-  --green: #5DCB8E;
-  --red: #E8685F;
-  --amber: #F2A03D;
+  /* surfaces — deep ink-teal, lifting toward cards */
+  --bg:    #0A1620;
+  --bg2:   #0E1E2A;
+  --card:  #13283A;
+  --card2: #1B3447;
+  --line:  #1E384B;
+  --line2: #2B4B62;
+
+  /* text */
+  --txt:  #EAF3F9;
+  --txt2: #9BB3C6;
+  --txt3: #5F7689;
+
+  /* ACCENT — sunrise coral (this is the app's signature) */
+  --gold: #FF7A5C;
+
+  /* status */
+  --green: #4ADE80;
+  --red:   #FF5D52;
+  --amber: #F6B73C;
+
+  /* sport coding (retuned for the teal base) */
+  --swim: #38BDF8;
+  --bike: #57D08C;
+  --run:  #F8974A;
+  --push: #A78BFA;
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+* { box-sizing: border-box; }
 
-html, body {
-  background: var(--bg);
-  color: var(--txt);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
+html {
+  margin: 0; padding: 0;
+  background: #060F18;            /* darker letterbox on wide screens */
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  max-width: 480px;
   margin: 0 auto;
+  max-width: 480px;
   min-height: 100vh;
-  padding-bottom: 90px;
+  padding-bottom: 88px;           /* clear the fixed bottom nav */
+  /* subtle dawn gradient: a little warmth bleeding in at the top */
+  background:
+    radial-gradient(120% 50% at 50% -10%, rgba(255,122,92,0.10), transparent 60%),
+    linear-gradient(180deg, #0C1C28 0%, var(--bg) 38%);
+  background-attachment: fixed;
+  color: var(--txt);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.archivo { font-family: 'Archivo', system-ui, sans-serif; }
+/* display face — used via className="archivo" on big numbers & titles */
+.archivo {
+  font-family: 'Archivo', 'Inter', sans-serif;
+  font-feature-settings: 'tnum' 1;  /* tabular figures so countdowns/stats don't jitter */
+}
+
+/* form controls inherit the theme */
+input, select, textarea, button { font-family: inherit; }
+input, select, textarea {
+  outline: none;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--gold) !important;
+  box-shadow: 0 0 0 3px rgba(255,122,92,0.18);
+}
+
+/* accessible keyboard focus */
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* range slider accent (niggle pain slider etc.) */
+input[type="range"] { accent-color: var(--gold); }
+
+/* tidy scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 99px; }
+::selection { background: rgba(255,122,92,0.30); color: #fff; }
+
+/* respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

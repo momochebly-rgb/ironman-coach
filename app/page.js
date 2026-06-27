@@ -289,7 +289,7 @@ export default function Dashboard() {
                 return <div style={{ ...tip }}>{r.reasons[0]}</div>;
               }
               const colMap = { green:"var(--green)", yellow:"var(--amber)", red:"var(--red)" };
-              const bgMap = { green:"rgba(93,203,142,0.12)", yellow:"rgba(242,193,78,0.12)", red:"rgba(232,104,95,0.12)" };
+              const bgMap = { green:"rgba(74,222,128,0.12)", yellow:"rgba(246,183,60,0.12)", red:"rgba(255,93,82,0.12)" };
               const col = colMap[r.level];
               return (
                 <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:16, overflow:"hidden", marginBottom:8 }}>
@@ -360,7 +360,7 @@ export default function Dashboard() {
                   <button key={i} onClick={()=>openEdit(key)} style={{
                     aspectRatio:"1", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"flex-start",
                     gap:2, padding:"5px 2px", borderRadius:10, cursor:"pointer", fontFamily:"inherit",
-                    background: isToday ? "rgba(242,193,78,0.14)" : "var(--card)",
+                    background: isToday ? "rgba(255,122,92,0.14)" : "var(--card)",
                     border: `1px solid ${isToday ? "var(--gold)" : "var(--line)"}`,
                   }}>
                     <span style={{ fontSize:12, fontWeight:700, color: isToday ? "var(--gold)" : "var(--txt)" }}>{day}</span>
@@ -1081,7 +1081,7 @@ const blockHead = { display:"flex", justifyContent:"space-between", alignItems:"
 const logItem = { display:"flex", justifyContent:"space-between", alignItems:"center", padding:12, background:"var(--card)", border:"1px solid var(--line)", borderRadius:10, marginBottom:8 };
 const logBadge = { width:34, height:34, borderRadius:9, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 };
 const dayRow = { display:"flex", alignItems:"center", gap:12, width:"100%", padding:"10px 12px", background:"var(--card)", border:"1px solid var(--line)", borderRadius:12, marginBottom:8, cursor:"pointer", fontFamily:"inherit", color:"var(--txt)" };
-const editedTag = { fontSize:9, fontWeight:600, color:"var(--gold)", background:"rgba(242,193,78,0.15)", padding:"2px 7px", borderRadius:99, flexShrink:0 };
+const editedTag = { fontSize:9, fontWeight:600, color:"var(--gold)", background:"rgba(255,122,92,0.15)", padding:"2px 7px", borderRadius:99, flexShrink:0 };
 const input2 = { width:"100%", fontSize:15, padding:"11px 13px", border:"1px solid var(--line2)", borderRadius:10, background:"var(--bg2)", color:"var(--txt)", fontFamily:"inherit" };
 const primaryBtn = { width:"100%", padding:14, fontSize:15, fontWeight:700, background:"var(--gold)", color:"#1a1206", border:"none", borderRadius:10, cursor:"pointer", marginTop:4 };
 const ghostBtn = { width:"100%", padding:12, fontSize:14, fontWeight:600, background:"transparent", color:"var(--txt2)", border:"1px solid var(--line2)", borderRadius:10, cursor:"pointer", fontFamily:"inherit" };
@@ -1092,7 +1092,7 @@ const userBubble = { maxWidth:"82%", background:"var(--gold)", color:"#1a1206", 
 const coachBubble = { maxWidth:"90%", background:"var(--card)", border:"1px solid var(--line)", color:"var(--txt)", padding:"12px 14px", borderRadius:"14px 14px 14px 4px", fontSize:14, lineHeight:1.6, whiteSpace:"pre-wrap" };
 const modalBg = { position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:200, padding:0 };
 const modalCard = { width:"100%", maxWidth:480, background:"var(--bg)", borderTop:"1px solid var(--line2)", borderRadius:"18px 18px 0 0", padding:"20px 18px calc(env(safe-area-inset-bottom) + 20px)" };
-const nav = { position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:480, background:"rgba(14,27,42,0.92)", backdropFilter:"blur(16px)", WebkitBackdropFilter:"blur(16px)", borderTop:"1px solid var(--line)", display:"flex", padding:"8px 6px calc(env(safe-area-inset-bottom) + 8px)", zIndex:100 };
+const nav = { position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:480, background:"rgba(10,22,32,0.92)", backdropFilter:"blur(16px)", WebkitBackdropFilter:"blur(16px)", borderTop:"1px solid var(--line)", display:"flex", padding:"8px 6px calc(env(safe-area-inset-bottom) + 8px)", zIndex:100 };
 
 function chip(on) { return { padding:"8px 14px", border:`1px solid ${on?"var(--gold)":"var(--line2)"}`, borderRadius:99, fontSize:12, fontWeight:600, background:on?"var(--gold)":"transparent", color:on?"#1a1206":"var(--txt2)", cursor:"pointer", fontFamily:"inherit" }; }
 function navI(on) { return { flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3, padding:"6px 0", background:"none", border:"none", color:on?"var(--gold)":"var(--txt3)", cursor:"pointer", fontFamily:"inherit", fontSize:10, fontWeight:600 }; }
