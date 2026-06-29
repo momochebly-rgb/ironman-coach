@@ -5,6 +5,7 @@ import { WORKOUTS, workoutKeyFor } from "../lib/workouts";
 import { loadInjuries, addInjury, deleteInjury, byPart, activeNiggles, BODY_PARTS, WHEN_OPTIONS } from "../lib/injuries";
 import { computeReadiness } from "../lib/readiness";
 import { buildWeekly } from "../lib/weekly";
+import { RACES, daysUntil, weeksUntil } from "../lib/races";
 
 const MARATHON = new Date("2026-11-29");
 const IRONMAN = new Date("2027-09-19");
@@ -78,6 +79,7 @@ const MONTHS_FULL = ["January","February","March","April","May","June","July","A
 
 export default function Dashboard() {
   const [tab, setTab] = useState("today");
+  const [openRace, setOpenRace] = useState(null); // race id when hub is open
   const [dt, setDt] = useState("lift");
   const [now, setNow] = useState(null);
 
@@ -109,9 +111,11 @@ export default function Dashboard() {
   // Coach chat
   const [coachMode, setCoachMode] = useState("head");
   const [chat, setChat] = useState([]);
+  const [pendingImages, setPendingImages] = useState([]); // [{dataUrl, base64, mediaType}]
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const chatEndRef = useRef(null);
+  const imgInputRef = useRef(null);
 
   useEffect(() => {
     const d = new Date();
@@ -161,6 +165,15 @@ export default function Dashboard() {
     setInjuries(deleteInjury(id));
   }
 
+  useEffect(() => {
+    if (openRace && acts === null && !loadingStrava && !stravaErr) {
+      setLoadingStrava(true);
+      fetch("/api/activities").then(r => r.json()).then(d => {
+        if (d.ok) setActs(d.activities); else setStravaErr(d.error || "Could not load activities");
+      }).catch(e => setStravaErr(e.message)).finally(() => setLoadingStrava(false));
+    }
+  }, [openRace, acts, loadingStrava, stravaErr]);
+
   function shiftMonth(delta) {
     if (!calMonth) return;
     let m = calMonth.m + delta, y = calMonth.y;
@@ -184,17 +197,36 @@ export default function Dashboard() {
     setSched(next); saveSchedule(next); setEditDay(null);
   }
 
+  async function onPickImages(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ""; // allow re-picking the same file
+    const room = 4 - pendingImages.length;
+    for (const file of files.slice(0, Math.max(0, room))) {
+      try {
+        const processed = await processImageFile(file);
+        setPendingImages((prev) => prev.length >= 4 ? prev : [...prev, processed]);
+      } catch {}
+    }
+  }
+  function removePendingImage(idx) {
+    setPendingImages((prev) => prev.filter((_, i) => i !== idx));
+  }
+
   async function sendToCoach(text) {
     const msg = (text || input).trim();
-    if (!msg || sending) return;
+    const imgs = pendingImages;
+    if ((!msg && imgs.length === 0) || sending) return;
     setInput("");
-    const newChat = [...chat, { role: "user", content: msg }];
-    setChat(newChat); setSending(true);
+    const newChat = [...chat, { role: "user", content: msg, images: imgs.map(i => i.dataUrl) }];
+    setChat(newChat); setSending(true); setPendingImages([]);
     try {
       const res = await fetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, mode: coachMode, history: chat, injuries: activeNiggles(injuries) }),
+        body: JSON.stringify({
+          message: msg, mode: coachMode, history: chat, injuries: activeNiggles(injuries),
+          images: imgs.map(i => ({ media_type: i.mediaType, data: i.base64 })),
+        }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -255,6 +287,7 @@ export default function Dashboard() {
               dateLabel="Nov 29, 2026"
               days={dM}
               accent="var(--run)"
+              onClick={()=>{ setOpenRace("beirut"); window.scrollTo(0,0); }}
             />
             <RaceCard
               img="/ironman.png"
@@ -264,6 +297,7 @@ export default function Dashboard() {
               dateLabel="Sep 2027"
               days={dI}
               accent="var(--swim)"
+              onClick={()=>{ setOpenRace("italy"); window.scrollTo(0,0); }}
             />
 
             <Lbl>Today's session</Lbl>
@@ -640,7 +674,16 @@ export default function Dashboard() {
               )}
               {chat.map((m, i) => (
                 <div key={i} style={{ marginBottom:12, display:"flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-                  <div style={m.role === "user" ? userBubble : coachBubble}>{m.content}</div>
+                  <div style={m.role === "user" ? userBubble : coachBubble}>
+                    {m.images && m.images.length > 0 && (
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom: m.content ? 8 : 0 }}>
+                        {m.images.map((src, k) => (
+                          <img key={k} src={src} alt="attached" style={{ width:96, height:96, objectFit:"cover", borderRadius:8, border:"1px solid rgba(0,0,0,0.15)" }} />
+                        ))}
+                      </div>
+                    )}
+                    {m.content}
+                  </div>
                 </div>
               ))}
               {sending && <div style={{ ...coachBubble, color:"var(--txt3)" }}>Coach is thinking…</div>}
@@ -651,7 +694,22 @@ export default function Dashboard() {
                 {QUICK_QS.map((q,i) => (<button key={i} onClick={()=>sendToCoach(q)} style={coachQ}>{q}</button>))}
               </div>
             )}
-            <div style={{ display:"flex", gap:8, marginTop:14, position:"sticky", bottom:8 }}>
+            {/* pending image previews */}
+            {pendingImages.length > 0 && (
+              <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginTop:12 }}>
+                {pendingImages.map((img, i) => (
+                  <div key={i} style={{ position:"relative" }}>
+                    <img src={img.dataUrl} alt="to send" style={{ width:64, height:64, objectFit:"cover", borderRadius:8, border:"1px solid var(--line2)" }} />
+                    <button onClick={()=>removePendingImage(i)} style={{ position:"absolute", top:-6, right:-6, width:20, height:20, borderRadius:99, background:"var(--red)", color:"#fff", border:"none", fontSize:12, lineHeight:"20px", cursor:"pointer", padding:0 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <input ref={imgInputRef} type="file" accept="image/*" multiple onChange={onPickImages} style={{ display:"none" }} />
+            <div style={{ display:"flex", gap:8, marginTop:14, position:"sticky", bottom:8, alignItems:"center" }}>
+              <button onClick={()=>imgInputRef.current && imgInputRef.current.click()} disabled={sending || pendingImages.length>=4}
+                style={{ flexShrink:0, width:46, height:46, borderRadius:12, border:"1px solid var(--line2)", background:"var(--bg2)", color:"var(--txt2)", fontSize:20, cursor:"pointer", opacity: pendingImages.length>=4?0.4:1 }}
+                title="Attach photo">📷</button>
               <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") sendToCoach(); }}
                 placeholder={coachMode==="head" ? "Ask Coach Vince…" : "Bring it to the team…"}
                 style={{ flex:1, fontSize:15, padding:"12px 14px", border:"1px solid var(--line2)", borderRadius:12, background:"var(--bg2)", color:"var(--txt)", fontFamily:"inherit" }} />
@@ -859,6 +917,8 @@ export default function Dashboard() {
         </div>
       )}
 
+      {openRace && <RaceHub raceId={openRace} acts={acts} well={well} onClose={()=>setOpenRace(null)} />}
+
       <div style={nav}>
         {[["today","🏠","Today"],["calendar","📅","Calendar"],["wellness","❤️","Wellness"],["body","🩹","Body"],["load","📊","Load"],["coach","💬","Coach"]].map(([id,ic,lbl]) => (
           <button key={id} onClick={()=>{ setTab(id); window.scrollTo(0,0); }} style={navI(tab===id)}>
@@ -915,10 +975,94 @@ function Cd({ num, label, loc, accent }) {
   </div>);
 }
 
-function RaceCard({ img, fallbackBg, name, loc, dateLabel, days, accent }) {
+function RaceHub({ raceId, acts, well, onClose }) {
+  const race = RACES[raceId];
+  if (!race) return null;
+  const days = daysUntil(race.date);
+  const weeks = weeksUntil(race.date);
+
+  // longest single sessions per sport from activities
+  const longest = { swim: 0, bike: 0, run: 0 };
+  for (const a of (acts || [])) {
+    if (["swim","bike","run"].includes(a.sport) && a.distanceKm > longest[a.sport]) longest[a.sport] = a.distanceKm;
+  }
+  // current fitness (CTL) from wellness
+  const latestFit = (well || []).find(r => r.fitness != null);
+  const fitness = latestFit ? Math.round(latestFit.fitness) : null;
+  // fitness trend: compare newest vs ~14 records back
+  let fitTrend = null;
+  const fitSeries = (well || []).filter(r => r.fitness != null);
+  if (fitSeries.length > 5) {
+    const recent = fitSeries[0].fitness, older = fitSeries[Math.min(fitSeries.length-1, 14)].fitness;
+    if (older) fitTrend = Math.round((recent - older));
+  }
+
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:300, background:"var(--bg)", overflowY:"auto", maxWidth:480, margin:"0 auto" }}>
+      {/* banner header */}
+      <div style={{ position:"relative", height:160, background: race.id==="beirut" ? "linear-gradient(135deg,#C8102E,#7A0A1C)" : "linear-gradient(135deg,#1A1A1A,#000)", display:"flex", alignItems:"center", justifyContent:"center", paddingTop:"env(safe-area-inset-top)" }}>
+        <img src={race.img} alt={race.name} style={{ maxHeight:"55%", maxWidth:"80%", objectFit:"contain" }} onError={(e)=>{e.target.style.display='none';}} />
+        <button onClick={onClose} style={{ position:"absolute", top:"calc(env(safe-area-inset-top) + 12px)", left:14, width:38, height:38, borderRadius:99, background:"rgba(0,0,0,0.4)", color:"#fff", border:"none", fontSize:20, cursor:"pointer", backdropFilter:"blur(8px)" }}>‹</button>
+      </div>
+
+      <div style={{ padding:18 }}>
+        <div className="archivo" style={{ fontSize:22, fontWeight:800 }}>{race.name}</div>
+        <div style={{ fontSize:13, color:"var(--txt2)", marginTop:2 }}>{race.loc} · {race.dateLabel}</div>
+        <div style={{ fontSize:12, color:race.accent, marginTop:6, fontWeight:600 }}>{race.goal}</div>
+
+        {/* countdown hero */}
+        <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:16, padding:20, marginTop:16, textAlign:"center" }}>
+          <div className="archivo" style={{ fontSize:52, fontWeight:900, lineHeight:1, color:race.accent }}>{days}</div>
+          <div style={{ fontSize:13, color:"var(--txt2)", marginTop:4 }}>days to go · {weeks} weeks</div>
+        </div>
+
+        {/* Am I on track */}
+        <Lbl>Am I on track?</Lbl>
+        <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:16, marginBottom:12 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:4 }}>
+            <span style={{ fontSize:13, color:"var(--txt2)" }}>Current fitness (CTL)</span>
+            <span><b className="archivo" style={{ fontSize:22, fontWeight:800 }}>{fitness ?? "—"}</b>
+              {fitTrend != null && <span style={{ fontSize:12, fontWeight:700, color: fitTrend>=0?"var(--green)":"var(--amber)", marginLeft:6 }}>{fitTrend>=0?"▲":"▼"}{Math.abs(fitTrend)}</span>}
+            </span>
+          </div>
+          <div style={{ fontSize:11, color:"var(--txt3)", lineHeight:1.5 }}>
+            {fitTrend == null ? "Building your fitness baseline." : fitTrend > 0 ? "Your fitness is trending up — keep stacking consistent weeks." : "Fitness has dipped recently — expected if you're recovering or tapering."}
+          </div>
+        </div>
+
+        {/* readiness vs race distance */}
+        <Lbl>Distance readiness</Lbl>
+        {race.legs.map((leg) => {
+          const have = longest[leg.sport] || 0;
+          const pct = Math.min(100, Math.round(have / leg.target * 100));
+          const col = leg.sport==="swim"?"var(--swim)":leg.sport==="bike"?"var(--bike)":"var(--run)";
+          return (
+            <div key={leg.sport} style={{ marginBottom:14 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"var(--txt2)", marginBottom:6 }}>
+                <span>{leg.label} · longest {have.toFixed(have<10?2:0)} / {leg.target} km</span>
+                <b style={{ color:"var(--txt)", fontWeight:600 }}>{pct}%</b>
+              </div>
+              <div style={{ height:8, borderRadius:99, background:"var(--bg2)", overflow:"hidden" }}>
+                <div style={{ height:"100%", borderRadius:99, width:`${pct}%`, background:col }} />
+              </div>
+            </div>
+          );
+        })}
+
+        {/* placeholders for later phases */}
+        <Lbl>Coming up in your prep</Lbl>
+        <div style={{ ...tipStyle, marginBottom:8 }}>📋 Pacing plan, race-day fueling, and a gear & logistics checklist will appear here as we build them out — and surface automatically as race week approaches.</div>
+
+        <button onClick={onClose} style={{ ...ghostBtn, marginTop:8 }}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+function RaceCard({ img, fallbackBg, name, loc, dateLabel, days, accent, onClick }) {
   const [imgOk, setImgOk] = useState(true);
   return (
-    <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:16, overflow:"hidden", marginBottom:12 }}>
+    <div onClick={onClick} style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:16, overflow:"hidden", marginBottom:12, cursor: onClick?"pointer":"default" }}>
       {/* banner */}
       <div style={{ height:96, background: fallbackBg, display:"flex", alignItems:"center", justifyContent:"center", position:"relative" }}>
         {imgOk ? (
@@ -934,9 +1078,12 @@ function RaceCard({ img, fallbackBg, name, loc, dateLabel, days, accent }) {
           <div className="archivo" style={{ fontSize:15, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{name}</div>
           <div style={{ fontSize:11, color:"var(--txt2)", marginTop:1 }}>{loc} · {dateLabel}</div>
         </div>
-        <div style={{ textAlign:"right", flexShrink:0, paddingLeft:10 }}>
-          <div className="archivo" style={{ fontSize:26, fontWeight:800, lineHeight:1, color:accent }}>{days}</div>
-          <div style={{ fontSize:10, color:"var(--txt3)" }}>days to go</div>
+        <div style={{ textAlign:"right", flexShrink:0, paddingLeft:10, display:"flex", alignItems:"center", gap:8 }}>
+          <div>
+            <div className="archivo" style={{ fontSize:26, fontWeight:800, lineHeight:1, color:accent }}>{days}</div>
+            <div style={{ fontSize:10, color:"var(--txt3)" }}>days to go</div>
+          </div>
+          {onClick && <span style={{ color:"var(--txt3)", fontSize:20 }}>›</span>}
         </div>
       </div>
     </div>
