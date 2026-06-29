@@ -5,7 +5,7 @@ import { WORKOUTS, workoutKeyFor } from "../lib/workouts";
 import { loadInjuries, addInjury, deleteInjury, byPart, activeNiggles, BODY_PARTS, WHEN_OPTIONS } from "../lib/injuries";
 import { computeReadiness } from "../lib/readiness";
 import { buildWeekly } from "../lib/weekly";
-import { RACES, daysUntil, weeksUntil } from "../lib/races";
+import { RACES, daysUntil, weeksUntil, marathonPacingPlan, FUELING, CHECKLIST } from "../lib/races";
 
 const MARATHON = new Date("2026-11-29");
 const IRONMAN = new Date("2027-09-19");
@@ -77,6 +77,59 @@ const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
+// Resize + re-encode any picked image to a JPEG base64 (max 1024px long edge).
+// This normalizes format (HEIC/PNG/etc -> JPEG the vision API accepts) and keeps
+// the payload small/fast. Also produces a tiny thumb for display + persistence.
+// Returns { dataUrl, base64, thumb, mediaType }.
+function processImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const render = (max, q) => {
+          let { width, height } = img;
+          if (width > height && width > max) { height = Math.round(height * max / width); width = max; }
+          else if (height > max) { width = Math.round(width * max / height); height = max; }
+          else if (width <= max && height <= max) { /* keep */ }
+          const canvas = document.createElement("canvas");
+          canvas.width = width; canvas.height = height;
+          canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+          return canvas.toDataURL("image/jpeg", q);
+        };
+        const dataUrl = render(1024, 0.82);   // sent to the vision API
+        const thumb = render(256, 0.7);        // stored + displayed (tiny)
+        resolve({ dataUrl, base64: dataUrl.split(",")[1], thumb, mediaType: "image/jpeg" });
+      };
+      img.onerror = () => reject(new Error("Could not load image"));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error("Could not read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+const COACH_CHAT_KEY = "coach_chat_v1";
+
+// Save chat to localStorage, capped + degrade gracefully if over quota.
+function saveChat(chat) {
+  const trimmed = chat.slice(-60); // keep a generous rolling window on disk
+  try {
+    localStorage.setItem(COACH_CHAT_KEY, JSON.stringify(trimmed));
+  } catch {
+    // quota hit — drop images from all but the last few messages and retry
+    try {
+      const light = trimmed.map((m, i) =>
+        i >= trimmed.length - 6 ? m : { role: m.role, content: m.content }
+      );
+      localStorage.setItem(COACH_CHAT_KEY, JSON.stringify(light));
+    } catch {}
+  }
+}
+function loadChat() {
+  try { const raw = localStorage.getItem(COACH_CHAT_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+
 export default function Dashboard() {
   const [tab, setTab] = useState("today");
   const [openRace, setOpenRace] = useState(null); // race id when hub is open
@@ -147,6 +200,9 @@ export default function Dashboard() {
     }).catch(e => setActDetail({ error: e.message })).finally(() => setActLoading(false));
   }
 
+  useEffect(() => { const saved = loadChat(); if (saved.length) setChat(saved); }, []);
+  useEffect(() => { if (chat.length) saveChat(chat); }, [chat]);
+
   useEffect(() => { if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" }); }, [chat, sending]);
 
   const todayKey = now ? ymd(now) : null;
@@ -212,19 +268,35 @@ export default function Dashboard() {
     setPendingImages((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  function clearChat() {
+    if (!confirm("Clear this conversation? The coaches will start fresh.")) return;
+    setChat([]);
+    try { localStorage.removeItem(COACH_CHAT_KEY); } catch {}
+  }
+
   async function sendToCoach(text) {
     const msg = (text || input).trim();
     const imgs = pendingImages;
     if ((!msg && imgs.length === 0) || sending) return;
     setInput("");
-    const newChat = [...chat, { role: "user", content: msg, images: imgs.map(i => i.dataUrl) }];
+    const newChat = [...chat, { role: "user", content: msg, images: imgs.map(i => i.thumb) }];
     setChat(newChat); setSending(true); setPendingImages([]);
+    // History sent to the coaches: text-only (images are never replayed — the
+    // coaches "remember" a photo through their own earlier description of it).
+    // Image turns carry a placeholder so the thread stays coherent.
+    const historyPayload = chat
+      .map(m => ({
+        role: m.role,
+        content: m.content || (m.images && m.images.length ? "[I shared a screenshot here — see your reply below for what it showed]" : ""),
+      }))
+      .filter(m => m.content)
+      .slice(-20);
     try {
       const res = await fetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: msg, mode: coachMode, history: chat, injuries: activeNiggles(injuries),
+          message: msg, mode: coachMode, history: historyPayload, injuries: activeNiggles(injuries),
           images: imgs.map(i => ({ media_type: i.mediaType, data: i.base64 })),
         }),
       });
@@ -660,16 +732,20 @@ export default function Dashboard() {
         {tab === "coach" && (
           <>
             <Lbl>Your coach</Lbl>
-            <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+            <div style={{ display:"flex", gap:8, marginBottom:14, alignItems:"center" }}>
               <button onClick={()=>setCoachMode("head")} style={chip(coachMode==="head")}>🧠 Head Coach</button>
               <button onClick={()=>setCoachMode("team")} style={chip(coachMode==="team")}>👥 Team Meeting</button>
+              {chat.length > 0 && (
+                <button onClick={clearChat} title="Clear conversation"
+                  style={{ marginLeft:"auto", flexShrink:0, background:"transparent", border:"1px solid var(--line2)", color:"var(--txt3)", borderRadius:10, padding:"7px 10px", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>Clear</button>
+              )}
             </div>
             <div style={{ minHeight:200 }}>
               {chat.length === 0 && (
                 <div style={{ ...tip, marginBottom:12 }}>
                   {coachMode === "head"
-                    ? "Talk to Coach Vince. He reads your real Strava data, and can change your calendar when you ask."
-                    : "Full team meeting — all coaches weigh in, Vince decides. Reads Strava, can update your calendar."}
+                    ? "Talk to Coach Vince. He reads your real training data, remembers this conversation, and can change your calendar when you ask."
+                    : "Full team meeting — all coaches weigh in, Vince decides. Reads your data, remembers the conversation, can update your calendar."}
                 </div>
               )}
               {chat.map((m, i) => (
@@ -975,6 +1051,71 @@ function Cd({ num, label, loc, accent }) {
   </div>);
 }
 
+function RaceChecklist({ raceId, accent }) {
+  const groups = CHECKLIST[raceId] || [];
+  const storeKey = `racehub_checklist_${raceId}`;
+  const [checked, setChecked] = useState({});
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    try { const raw = localStorage.getItem(storeKey); if (raw) setChecked(JSON.parse(raw)); } catch {}
+    setLoaded(true);
+  }, [storeKey]);
+
+  function toggle(key) {
+    setChecked((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem(storeKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+  function reset() {
+    setChecked({});
+    try { localStorage.removeItem(storeKey); } catch {}
+  }
+
+  const allItems = groups.flatMap((g, gi) => g.items.map((_, ii) => `${gi}:${ii}`));
+  const doneCount = allItems.filter((k) => checked[k]).length;
+  const total = allItems.length;
+  const pct = total ? Math.round(doneCount / total * 100) : 0;
+
+  if (!loaded) return null;
+
+  return (
+    <>
+      <Lbl>Gear &amp; logistics checklist</Lbl>
+      <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:16, marginBottom:12 }}>
+        {/* progress */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+          <span style={{ fontSize:13, color:"var(--txt2)" }}>{doneCount} of {total} packed</span>
+          <span className="archivo" style={{ fontSize:16, fontWeight:800, color:accent }}>{pct}%</span>
+        </div>
+        <div style={{ height:8, borderRadius:99, background:"var(--bg2)", overflow:"hidden", marginBottom:14 }}>
+          <div style={{ height:"100%", borderRadius:99, width:`${pct}%`, background:accent, transition:"width .2s" }} />
+        </div>
+
+        {groups.map((g, gi) => (
+          <div key={gi} style={{ marginBottom: gi<groups.length-1?16:0 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:accent, marginBottom:8, textTransform:"uppercase", letterSpacing:"0.04em" }}>{g.group}</div>
+            {g.items.map((it, ii) => {
+              const key = `${gi}:${ii}`;
+              const on = !!checked[key];
+              return (
+                <div key={ii} onClick={()=>toggle(key)} style={{ display:"flex", gap:10, alignItems:"flex-start", padding:"7px 0", cursor:"pointer" }}>
+                  <span style={{ flexShrink:0, width:20, height:20, borderRadius:6, border:`2px solid ${on?accent:"var(--line2)"}`, background:on?accent:"transparent", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, color:"#0A1620", fontWeight:900, marginTop:1 }}>{on?"✓":""}</span>
+                  <span style={{ fontSize:13, lineHeight:1.45, color: on?"var(--txt3)":"var(--txt)", textDecoration: on?"line-through":"none" }}>{it}</span>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+
+        {doneCount>0 && <button onClick={reset} style={{ marginTop:14, background:"transparent", border:"1px solid var(--line2)", color:"var(--txt2)", borderRadius:10, padding:"8px 14px", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>Reset checklist</button>}
+      </div>
+    </>
+  );
+}
+
 function RaceHub({ raceId, acts, well, onClose }) {
   const race = RACES[raceId];
   if (!race) return null;
@@ -1049,9 +1190,69 @@ function RaceHub({ raceId, acts, well, onClose }) {
           );
         })}
 
-        {/* placeholders for later phases */}
-        <Lbl>Coming up in your prep</Lbl>
-        <div style={{ ...tipStyle, marginBottom:8 }}>📋 Pacing plan, race-day fueling, and a gear & logistics checklist will appear here as we build them out — and surface automatically as race week approaches.</div>
+        {/* PACING PLAN */}
+        {race.type === "run" && (() => {
+          const plan = marathonPacingPlan(race.pace.goalPace.replace("/km",""));
+          return (
+            <>
+              <Lbl>Pacing plan — target {race.pace.goalTime}</Lbl>
+              <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:16, marginBottom:12 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", marginBottom:12 }}>
+                  <div><div style={{ fontSize:11, color:"var(--txt3)" }}>Projected finish</div><div className="archivo" style={{ fontSize:18, fontWeight:800, color:race.accent }}>{plan.finishTime}</div></div>
+                  <div style={{ textAlign:"right" }}><div style={{ fontSize:11, color:"var(--txt3)" }}>Avg pace</div><div className="archivo" style={{ fontSize:18, fontWeight:800 }}>{plan.avgPace}/km</div></div>
+                </div>
+                {plan.rows.map((r,i) => (
+                  <div key={i} style={{ padding:"10px 0", borderTop:"1px solid var(--line)" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <span style={{ fontSize:13, fontWeight:700 }}>{r.label}</span>
+                      <span style={{ display:"flex", gap:10, alignItems:"baseline" }}>
+                        <b className="archivo" style={{ fontSize:15, color:race.accent }}>{r.pace}/km</b>
+                        <span style={{ fontSize:11, color:"var(--txt3)" }}>@{r.cumTime}</span>
+                      </span>
+                    </div>
+                    <div style={{ fontSize:11, color:"var(--txt2)", marginTop:3, lineHeight:1.45 }}>{r.note}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ ...tipStyle, marginBottom:8 }}>The @time is your target <b>cumulative time</b> at each checkpoint — glance at your watch there to know if you're on pace. Start controlled, finish strong.</div>
+            </>
+          );
+        })()}
+        {race.type === "tri" && (
+          <>
+            <Lbl>Pacing plan</Lbl>
+            <div style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:16, marginBottom:12 }}>
+              <div style={{ fontSize:13, fontWeight:700, marginBottom:6 }}>Sub-10:00 leg targets</div>
+              <div style={{ fontSize:12, color:"var(--txt2)", lineHeight:1.6 }}>{race.pace.goalPace}</div>
+              <div style={{ fontSize:11, color:"var(--txt3)", marginTop:8, lineHeight:1.5 }}>The cardinal Ironman rule: <b>don't blow the bike.</b> Ride within yourself so you can run off it. Detailed leg-by-leg pacing comes as race day nears.</div>
+            </div>
+          </>
+        )}
+
+        {/* FUELING PLAN */}
+        {FUELING[race.id] && (() => {
+          const f = FUELING[race.id];
+          return (
+            <>
+              <Lbl>Race-day fueling — {f.carbsPerHour}/hour</Lbl>
+              <div style={{ ...tipStyle, marginBottom:10 }}>{f.summary}</div>
+              {f.blocks.map((b,i) => (
+                <div key={i} style={{ background:"var(--card)", border:"1px solid var(--line)", borderRadius:14, padding:14, marginBottom:10 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:race.accent, marginBottom:8, textTransform:"uppercase", letterSpacing:"0.04em" }}>{b.when}</div>
+                  {b.items.map((it,k) => (
+                    <div key={k} style={{ display:"flex", gap:8, marginBottom: k<b.items.length-1?6:0 }}>
+                      <span style={{ color:race.accent, flexShrink:0, fontSize:13 }}>•</span>
+                      <span style={{ fontSize:12, color:"var(--txt2)", lineHeight:1.45 }}>{it}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </>
+          );
+        })()}
+
+        {/* GEAR & LOGISTICS CHECKLIST */}
+        <RaceChecklist raceId={race.id} accent={race.accent} />
 
         <button onClick={onClose} style={{ ...ghostBtn, marginTop:8 }}>Close</button>
       </div>

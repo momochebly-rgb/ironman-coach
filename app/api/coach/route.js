@@ -93,8 +93,9 @@ function summarizeWellness(records) {
 
 export async function POST(request) {
   try {
-    const { message, mode, history, injuries } = await request.json();
-    if (!message || !message.trim()) {
+    const { message, mode, history, injuries, images } = await request.json();
+    const hasImages = Array.isArray(images) && images.length > 0;
+    if ((!message || !message.trim()) && !hasImages) {
       return Response.json({ ok: false, error: "Empty message" }, { status: 400 });
     }
 
@@ -128,15 +129,28 @@ export async function POST(request) {
     const detailBlock = detailedActivities
       ? `\n\n--- DETAILED RECENT ACTIVITIES (splits, laps & HR zones — use these for analysis) ---\n${detailedActivities}`
       : "";
-    const system = `${persona}\n\n${SCHEDULE_RULES}\n\nToday's date: ${today}\n\n--- ATHLETE PROFILE ---\n${ATHLETE_PROFILE}\n\n--- REAL RECENT ACTIVITY DATA (last 30, summary) ---\n${stravaSummary}${detailBlock}\n\n--- REAL RECOVERY DATA (intervals.icu / COROS) ---\n${wellnessSummary}\n\n--- ACTIVE INJURIES / NIGGLES (logged by Maroun) ---\n${injurySummary}\n\nIMPORTANT: If there are active injuries, factor them into all training advice. Dr. Hale should weigh in on any injury with pain >= 4 or a worsening trend. When analysing a session, USE the detailed splits and HR zones above — comment on pacing consistency, zone distribution, and fade, not just totals.`;
+    const system = `${persona}\n\n${SCHEDULE_RULES}\n\nToday's date: ${today}\n\n--- ATHLETE PROFILE ---\n${ATHLETE_PROFILE}\n\n--- REAL RECENT ACTIVITY DATA (last 30, summary) ---\n${stravaSummary}${detailBlock}\n\n--- REAL RECOVERY DATA (intervals.icu / COROS) ---\n${wellnessSummary}\n\n--- ACTIVE INJURIES / NIGGLES (logged by Maroun) ---\n${injurySummary}\n\nIMPORTANT: If there are active injuries, factor them into all training advice. Dr. Hale should weigh in on any injury with pain >= 4 or a worsening trend. When analysing a session, USE the detailed splits and HR zones above — comment on pacing consistency, zone distribution, and fade, not just totals. The athlete may attach screenshots (COROS/Strava screens, race results, form photos, gear). Read them carefully and analyse what's actually shown; reconcile any numbers in an image with the real activity/wellness data above rather than taking a screenshot at face value.`;
 
     const messages = [];
     if (Array.isArray(history)) {
-      for (const h of history.slice(-6)) {
+      for (const h of history.slice(-20)) {
         if (h.role && h.content) messages.push({ role: h.role, content: h.content });
       }
     }
-    messages.push({ role: "user", content: message });
+    if (hasImages) {
+      // Vision message: image blocks first, then the text question.
+      const content = images
+        .filter((im) => im && im.data)
+        .slice(0, 4)
+        .map((im) => ({
+          type: "image",
+          source: { type: "base64", media_type: im.media_type || "image/jpeg", data: im.data },
+        }));
+      content.push({ type: "text", text: message && message.trim() ? message : "Here are some screenshots — take a look and tell me what you think." });
+      messages.push({ role: "user", content });
+    } else {
+      messages.push({ role: "user", content: message });
+    }
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
